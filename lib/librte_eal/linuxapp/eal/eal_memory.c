@@ -292,7 +292,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl,
 	int fd;
 	unsigned i;
 	void *virtaddr;
-	void *vma_addr = NULL;
+	void *vma_addr = (void*)0x0000010000000000;
 	size_t vma_len = 0;
 
 #ifdef RTE_EAL_SINGLE_FILE_SEGMENTS
@@ -360,7 +360,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl,
 		}
 
 		virtaddr = mmap(vma_addr, hugepage_sz, PROT_READ | PROT_WRITE,
-				MAP_SHARED, fd, 0);
+				MAP_SHARED|MAP_FIXED, fd, 0);
 		if (virtaddr == MAP_FAILED) {
 			RTE_LOG(ERR, EAL, "%s(): mmap failed: %s\n", __func__,
 					strerror(errno));
