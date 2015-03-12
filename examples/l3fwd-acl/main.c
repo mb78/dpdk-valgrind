@@ -73,8 +73,6 @@
 #include <rte_string_fns.h>
 #include <rte_acl.h>
 
-#include "main.h"
-
 #define DO_RFC_1812_CHECKS
 
 #define RTE_LOGTYPE_L3FWD RTE_LOGTYPE_USER1
@@ -1249,6 +1247,10 @@ app_acl_init(void)
 				acl_log("Socket %d of lcore %u is out "
 					"of range %d\n",
 					socketid, lcore_id, NB_SOCKETS);
+				free(route_base_ipv4);
+				free(route_base_ipv6);
+				free(acl_base_ipv4);
+				free(acl_base_ipv6);
 				return -1;
 			}
 
@@ -1923,7 +1925,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 }
 
 int
-MAIN(int argc, char **argv)
+main(int argc, char **argv)
 {
 	struct lcore_conf *qconf;
 	struct rte_eth_dev_info dev_info;

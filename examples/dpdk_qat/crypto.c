@@ -183,7 +183,7 @@ struct glob_keys g_crypto_hash_keys = {
  *
  */
 #define PACKET_DATA_START_PHYS(p) \
-		((p)->buf_physaddr + ((char *)p->data - (char *)p->buf_addr))
+		((p)->buf_physaddr + (p)->data_off)
 
 /*
  * A fixed offset to where the crypto is to be performed, which is the first
@@ -339,7 +339,7 @@ get_crypto_instance_on_core(CpaInstanceHandle *pInstanceHandle,
 	}
 
 	pLocalInstanceHandles = rte_malloc("pLocalInstanceHandles",
-			sizeof(CpaInstanceHandle) * numInstances, CACHE_LINE_SIZE);
+			sizeof(CpaInstanceHandle) * numInstances, RTE_CACHE_LINE_SIZE);
 
 	if (NULL == pLocalInstanceHandles) {
 		return CPA_STATUS_FAIL;
@@ -773,7 +773,7 @@ enum crypto_result
 crypto_encrypt(struct rte_mbuf *rte_buff, enum cipher_alg c, enum hash_alg h)
 {
 	CpaCySymDpOpData *opData =
-			(CpaCySymDpOpData *) ((char *) (rte_buff->data)
+			(CpaCySymDpOpData *) (rte_pktmbuf_mtod(rte_buff, char *)
 					+ CRYPTO_OFFSET_TO_OPDATA);
 	uint32_t lcore_id;
 
@@ -848,7 +848,7 @@ enum crypto_result
 crypto_decrypt(struct rte_mbuf *rte_buff, enum cipher_alg c, enum hash_alg h)
 {
 
-	CpaCySymDpOpData *opData = (void*) (((char *) rte_buff->data)
+	CpaCySymDpOpData *opData = (void*) (rte_pktmbuf_mtod(rte_buff, char *)
 			+ CRYPTO_OFFSET_TO_OPDATA);
 	uint32_t lcore_id;
 

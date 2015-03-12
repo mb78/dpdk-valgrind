@@ -71,8 +71,6 @@
 #include <rte_fbk_hash.h>
 #include <rte_ip.h>
 
-#include "main.h"
-
 #define RTE_LOGTYPE_IPv4_MULTICAST RTE_LOGTYPE_USER1
 
 #define MAX_PORTS 16
@@ -302,7 +300,7 @@ mcast_out_pkt(struct rte_mbuf *pkt, int use_clone)
 	/* copy metadata from source packet*/
 	hdr->port = pkt->port;
 	hdr->vlan_tci = pkt->vlan_tci;
-	hdr->l2_l3_len = pkt->l2_l3_len;
+	hdr->tx_offload = pkt->tx_offload;
 	hdr->hash = pkt->hash;
 
 	hdr->ol_flags = pkt->ol_flags;
@@ -669,7 +667,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 }
 
 int
-MAIN(int argc, char **argv)
+main(int argc, char **argv)
 {
 	struct lcore_queue_conf *qconf;
 	struct rte_eth_dev_info dev_info;

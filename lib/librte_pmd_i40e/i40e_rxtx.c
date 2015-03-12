@@ -105,6 +105,10 @@ i40e_rxd_status_to_pkt_flags(uint64_t qword)
 					I40E_RX_DESC_FLTSTAT_RSS_HASH) ==
 			I40E_RX_DESC_FLTSTAT_RSS_HASH) ? PKT_RX_RSS_HASH : 0;
 
+	/* Check if FDIR Match */
+	flags |= (qword & (1 << I40E_RX_DESC_STATUS_FLM_SHIFT) ?
+							PKT_RX_FDIR : 0);
+
 	return flags;
 }
 
@@ -410,47 +414,91 @@ i40e_rxd_ptype_to_pkt_flags(uint64_t qword)
 	return ip_ptype_map[ptype];
 }
 
+#define I40E_RX_DESC_EXT_STATUS_FLEXBH_MASK   0x03
+#define I40E_RX_DESC_EXT_STATUS_FLEXBH_FD_ID  0x01
+#define I40E_RX_DESC_EXT_STATUS_FLEXBH_FLEX   0x02
+#define I40E_RX_DESC_EXT_STATUS_FLEXBL_MASK   0x03
+#define I40E_RX_DESC_EXT_STATUS_FLEXBL_FLEX   0x01
+
+static inline uint64_t
+i40e_rxd_build_fdir(volatile union i40e_rx_desc *rxdp, struct rte_mbuf *mb)
+{
+	uint64_t flags = 0;
+#ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
+	uint16_t flexbh, flexbl;
+
+	flexbh = (rte_le_to_cpu_32(rxdp->wb.qword2.ext_status) >>
+		I40E_RX_DESC_EXT_STATUS_FLEXBH_SHIFT) &
+		I40E_RX_DESC_EXT_STATUS_FLEXBH_MASK;
+	flexbl = (rte_le_to_cpu_32(rxdp->wb.qword2.ext_status) >>
+		I40E_RX_DESC_EXT_STATUS_FLEXBL_SHIFT) &
+		I40E_RX_DESC_EXT_STATUS_FLEXBL_MASK;
+
+
+	if (flexbh == I40E_RX_DESC_EXT_STATUS_FLEXBH_FD_ID) {
+		mb->hash.fdir.hi =
+			rte_le_to_cpu_32(rxdp->wb.qword3.hi_dword.fd_id);
+		flags |= PKT_RX_FDIR_ID;
+	} else if (flexbh == I40E_RX_DESC_EXT_STATUS_FLEXBH_FLEX) {
+		mb->hash.fdir.hi =
+			rte_le_to_cpu_32(rxdp->wb.qword3.hi_dword.flex_bytes_hi);
+		flags |= PKT_RX_FDIR_FLX;
+	}
+	if (flexbl == I40E_RX_DESC_EXT_STATUS_FLEXBL_FLEX) {
+		mb->hash.fdir.lo =
+			rte_le_to_cpu_32(rxdp->wb.qword3.lo_dword.flex_bytes_lo);
+		flags |= PKT_RX_FDIR_FLX;
+	}
+#else
+	mb->hash.fdir.hi =
+		rte_le_to_cpu_32(rxdp->wb.qword0.hi_dword.fd_id);
+	flags |= PKT_RX_FDIR_ID;
+#endif
+	return flags;
+}
 static inline void
 i40e_txd_enable_checksum(uint64_t ol_flags,
 			uint32_t *td_cmd,
 			uint32_t *td_offset,
 			uint8_t l2_len,
 			uint16_t l3_len,
-			uint8_t inner_l2_len,
-			uint16_t inner_l3_len,
+			uint8_t outer_l2_len,
+			uint16_t outer_l3_len,
 			uint32_t *cd_tunneling)
 {
 	if (!l2_len) {
 		PMD_DRV_LOG(DEBUG, "L2 length set to 0");
 		return;
 	}
-	*td_offset |= (l2_len >> 1) << I40E_TX_DESC_LENGTH_MACLEN_SHIFT;
 
 	if (!l3_len) {
 		PMD_DRV_LOG(DEBUG, "L3 length set to 0");
 		return;
 	}
 
-	/* VXLAN packet TX checksum offload */
-	if (unlikely(ol_flags & PKT_TX_VXLAN_CKSUM)) {
-		uint8_t l4tun_len;
+	/* UDP tunneling packet TX checksum offload */
+	if (unlikely(ol_flags & PKT_TX_UDP_TUNNEL_PKT)) {
 
-		l4tun_len = ETHER_VXLAN_HLEN + inner_l2_len;
+		*td_offset |= (outer_l2_len >> 1)
+				<< I40E_TX_DESC_LENGTH_MACLEN_SHIFT;
 
-		if (ol_flags & PKT_TX_IPV4_CSUM)
+		if (ol_flags & PKT_TX_OUTER_IP_CKSUM)
 			*cd_tunneling |= I40E_TX_CTX_EXT_IP_IPV4;
-		else if (ol_flags & PKT_TX_IPV6)
+		else if (ol_flags & PKT_TX_OUTER_IPV4)
+			*cd_tunneling |= I40E_TX_CTX_EXT_IP_IPV4_NO_CSUM;
+		else if (ol_flags & PKT_TX_OUTER_IPV6)
 			*cd_tunneling |= I40E_TX_CTX_EXT_IP_IPV6;
 
 		/* Now set the ctx descriptor fields */
-		*cd_tunneling |= (l3_len >> 2) <<
+		*cd_tunneling |= (outer_l3_len >> 2) <<
 				I40E_TXD_CTX_QW0_EXT_IPLEN_SHIFT |
 				I40E_TXD_CTX_UDP_TUNNELING |
-				(l4tun_len >> 1) <<
+				(l2_len >> 1) <<
 				I40E_TXD_CTX_QW0_NATLEN_SHIFT;
 
-		l3_len = inner_l3_len;
-	}
+	} else
+		*td_offset |= (l2_len >> 1)
+			<< I40E_TX_DESC_LENGTH_MACLEN_SHIFT;
 
 	/* Enable L3 checksum offloads */
 	if (ol_flags & PKT_TX_IPV4_CSUM) {
@@ -661,14 +709,17 @@ i40e_rx_scan_hw_ring(struct i40e_rx_queue *rxq)
 			pkt_flags = i40e_rxd_status_to_pkt_flags(qword1);
 			pkt_flags |= i40e_rxd_error_to_pkt_flags(qword1);
 			pkt_flags |= i40e_rxd_ptype_to_pkt_flags(qword1);
-			mb->ol_flags = pkt_flags;
 
 			mb->packet_type = (uint16_t)((qword1 &
 					I40E_RXD_QW1_PTYPE_MASK) >>
 					I40E_RXD_QW1_PTYPE_SHIFT);
 			if (pkt_flags & PKT_RX_RSS_HASH)
 				mb->hash.rss = rte_le_to_cpu_32(\
-					rxdp->wb.qword0.hi_dword.rss);
+					rxdp[j].wb.qword0.hi_dword.rss);
+			if (pkt_flags & PKT_RX_FDIR)
+				pkt_flags |= i40e_rxd_build_fdir(&rxdp[j], mb);
+
+			mb->ol_flags = pkt_flags;
 		}
 
 		for (j = 0; j < I40E_LOOK_AHEAD; j++)
@@ -903,10 +954,13 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		pkt_flags |= i40e_rxd_ptype_to_pkt_flags(qword1);
 		rxm->packet_type = (uint16_t)((qword1 & I40E_RXD_QW1_PTYPE_MASK) >>
 				I40E_RXD_QW1_PTYPE_SHIFT);
-		rxm->ol_flags = pkt_flags;
 		if (pkt_flags & PKT_RX_RSS_HASH)
 			rxm->hash.rss =
 				rte_le_to_cpu_32(rxd.wb.qword0.hi_dword.rss);
+		if (pkt_flags & PKT_RX_FDIR)
+			pkt_flags |= i40e_rxd_build_fdir(&rxd, rxm);
+
+		rxm->ol_flags = pkt_flags;
 
 		rx_pkts[nb_rx++] = rxm;
 	}
@@ -1060,10 +1114,13 @@ i40e_recv_scattered_pkts(void *rx_queue,
 		first_seg->packet_type = (uint16_t)((qword1 &
 					I40E_RXD_QW1_PTYPE_MASK) >>
 					I40E_RXD_QW1_PTYPE_SHIFT);
-		first_seg->ol_flags = pkt_flags;
 		if (pkt_flags & PKT_RX_RSS_HASH)
 			rxm->hash.rss =
 				rte_le_to_cpu_32(rxd.wb.qword0.hi_dword.rss);
+		if (pkt_flags & PKT_RX_FDIR)
+			pkt_flags |= i40e_rxd_build_fdir(&rxd, rxm);
+
+		first_seg->ol_flags = pkt_flags;
 
 		/* Prefetch data of first segment, if configured to do so. */
 		rte_prefetch0(RTE_PTR_ADD(first_seg->buf_addr,
@@ -1103,8 +1160,8 @@ i40e_calc_context_desc(uint64_t flags)
 {
 	uint64_t mask = 0ULL;
 
-	if (flags | PKT_TX_VXLAN_CKSUM)
-		mask |= PKT_TX_VXLAN_CKSUM;
+	if (flags | PKT_TX_UDP_TUNNEL_PKT)
+		mask |= PKT_TX_UDP_TUNNEL_PKT;
 
 #ifdef RTE_LIBRTE_IEEE1588
 	mask |= PKT_TX_IEEE1588_TMST;
@@ -1135,8 +1192,8 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	uint64_t ol_flags;
 	uint8_t l2_len;
 	uint16_t l3_len;
-	uint8_t inner_l2_len;
-	uint16_t inner_l3_len;
+	uint8_t outer_l2_len;
+	uint16_t outer_l3_len;
 	uint16_t nb_used;
 	uint16_t nb_ctx;
 	uint16_t tx_last;
@@ -1164,9 +1221,9 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		ol_flags = tx_pkt->ol_flags;
 		l2_len = tx_pkt->l2_len;
-		inner_l2_len = tx_pkt->inner_l2_len;
 		l3_len = tx_pkt->l3_len;
-		inner_l3_len = tx_pkt->inner_l3_len;
+		outer_l2_len = tx_pkt->outer_l2_len;
+		outer_l3_len = tx_pkt->outer_l3_len;
 
 		/* Calculate the number of context descriptors needed. */
 		nb_ctx = i40e_calc_context_desc(ol_flags);
@@ -1216,8 +1273,8 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		/* Enable checksum offloading */
 		cd_tunneling_params = 0;
 		i40e_txd_enable_checksum(ol_flags, &td_cmd, &td_offset,
-						l2_len, l3_len, inner_l2_len,
-						inner_l3_len,
+						l2_len, l3_len, outer_l2_len,
+						outer_l3_len,
 						&cd_tunneling_params);
 
 		if (unlikely(nb_ctx)) {
@@ -1697,7 +1754,7 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	/* Allocate the rx queue data structure */
 	rxq = rte_zmalloc_socket("i40e rx queue",
 				 sizeof(struct i40e_rx_queue),
-				 CACHE_LINE_SIZE,
+				 RTE_CACHE_LINE_SIZE,
 				 socket_id);
 	if (!rxq) {
 		PMD_DRV_LOG(ERR, "Failed to allocate memory for "
@@ -1756,7 +1813,7 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->sw_ring =
 		rte_zmalloc_socket("i40e rx sw ring",
 				   sizeof(struct i40e_rx_entry) * len,
-				   CACHE_LINE_SIZE,
+				   RTE_CACHE_LINE_SIZE,
 				   socket_id);
 	if (!rxq->sw_ring) {
 		i40e_dev_rx_queue_release(rxq);
@@ -1981,7 +2038,7 @@ i40e_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	/* Allocate the TX queue data structure. */
 	txq = rte_zmalloc_socket("i40e tx queue",
 				  sizeof(struct i40e_tx_queue),
-				  CACHE_LINE_SIZE,
+				  RTE_CACHE_LINE_SIZE,
 				  socket_id);
 	if (!txq) {
 		PMD_DRV_LOG(ERR, "Failed to allocate memory for "
@@ -2032,7 +2089,7 @@ i40e_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->sw_ring =
 		rte_zmalloc_socket("i40e tx sw ring",
 				   sizeof(struct i40e_tx_entry) * nb_desc,
-				   CACHE_LINE_SIZE,
+				   RTE_CACHE_LINE_SIZE,
 				   socket_id);
 	if (!txq->sw_ring) {
 		i40e_dev_tx_queue_release(txq);
@@ -2096,6 +2153,24 @@ i40e_ring_dma_zone_reserve(struct rte_eth_dev *dev,
 	return rte_memzone_reserve_aligned(z_name, ring_size,
 				socket_id, 0, I40E_ALIGN);
 #endif
+}
+
+const struct rte_memzone *
+i40e_memzone_reserve(const char *name, uint32_t len, int socket_id)
+{
+	const struct rte_memzone *mz = NULL;
+
+	mz = rte_memzone_lookup(name);
+	if (mz)
+		return mz;
+#ifdef RTE_LIBRTE_XEN_DOM0
+	mz = rte_memzone_reserve_bounded(name, len,
+		socket_id, 0, I40E_ALIGN, RTE_PGSIZE_2M);
+#else
+	mz = rte_memzone_reserve_aligned(name, len,
+				socket_id, 0, I40E_ALIGN);
+#endif
+	return mz;
 }
 
 void
@@ -2231,6 +2306,8 @@ i40e_tx_queue_init(struct i40e_tx_queue *txq)
 	tx_ctx.base = txq->tx_ring_phys_addr / I40E_QUEUE_BASE_ADDR_UNIT;
 	tx_ctx.qlen = txq->nb_tx_desc;
 	tx_ctx.rdylist = rte_le_to_cpu_16(vsi->info.qs_handle[0]);
+	if (vsi->type == I40E_VSI_FDIR)
+		tx_ctx.fd_ena = TRUE;
 
 	err = i40e_clear_lan_tx_queue_context(hw, pf_q);
 	if (err != I40E_SUCCESS) {
@@ -2446,4 +2523,128 @@ i40e_dev_clear_queues(struct rte_eth_dev *dev)
 		i40e_rx_queue_release_mbufs(dev->data->rx_queues[i]);
 		i40e_reset_rx_queue(dev->data->rx_queues[i]);
 	}
+}
+
+#define I40E_FDIR_NUM_TX_DESC  I40E_MIN_RING_DESC
+#define I40E_FDIR_NUM_RX_DESC  I40E_MIN_RING_DESC
+
+enum i40e_status_code
+i40e_fdir_setup_tx_resources(struct i40e_pf *pf)
+{
+	struct i40e_tx_queue *txq;
+	const struct rte_memzone *tz = NULL;
+	uint32_t ring_size;
+	struct rte_eth_dev *dev = pf->adapter->eth_dev;
+
+	if (!pf) {
+		PMD_DRV_LOG(ERR, "PF is not available");
+		return I40E_ERR_BAD_PTR;
+	}
+
+	/* Allocate the TX queue data structure. */
+	txq = rte_zmalloc_socket("i40e fdir tx queue",
+				  sizeof(struct i40e_tx_queue),
+				  RTE_CACHE_LINE_SIZE,
+				  SOCKET_ID_ANY);
+	if (!txq) {
+		PMD_DRV_LOG(ERR, "Failed to allocate memory for "
+					"tx queue structure.");
+		return I40E_ERR_NO_MEMORY;
+	}
+
+	/* Allocate TX hardware ring descriptors. */
+	ring_size = sizeof(struct i40e_tx_desc) * I40E_FDIR_NUM_TX_DESC;
+	ring_size = RTE_ALIGN(ring_size, I40E_DMA_MEM_ALIGN);
+
+	tz = i40e_ring_dma_zone_reserve(dev,
+					"fdir_tx_ring",
+					I40E_FDIR_QUEUE_ID,
+					ring_size,
+					SOCKET_ID_ANY);
+	if (!tz) {
+		i40e_dev_tx_queue_release(txq);
+		PMD_DRV_LOG(ERR, "Failed to reserve DMA memory for TX.");
+		return I40E_ERR_NO_MEMORY;
+	}
+
+	txq->nb_tx_desc = I40E_FDIR_NUM_TX_DESC;
+	txq->queue_id = I40E_FDIR_QUEUE_ID;
+	txq->reg_idx = pf->fdir.fdir_vsi->base_queue;
+	txq->vsi = pf->fdir.fdir_vsi;
+
+#ifdef RTE_LIBRTE_XEN_DOM0
+	txq->tx_ring_phys_addr = rte_mem_phy2mch(tz->memseg_id, tz->phys_addr);
+#else
+	txq->tx_ring_phys_addr = (uint64_t)tz->phys_addr;
+#endif
+	txq->tx_ring = (struct i40e_tx_desc *)tz->addr;
+	/*
+	 * don't need to allocate software ring and reset for the fdir
+	 * program queue just set the queue has been configured.
+	 */
+	txq->q_set = TRUE;
+	pf->fdir.txq = txq;
+
+	return I40E_SUCCESS;
+}
+
+enum i40e_status_code
+i40e_fdir_setup_rx_resources(struct i40e_pf *pf)
+{
+	struct i40e_rx_queue *rxq;
+	const struct rte_memzone *rz = NULL;
+	uint32_t ring_size;
+	struct rte_eth_dev *dev = pf->adapter->eth_dev;
+
+	if (!pf) {
+		PMD_DRV_LOG(ERR, "PF is not available");
+		return I40E_ERR_BAD_PTR;
+	}
+
+	/* Allocate the RX queue data structure. */
+	rxq = rte_zmalloc_socket("i40e fdir rx queue",
+				  sizeof(struct i40e_rx_queue),
+				  RTE_CACHE_LINE_SIZE,
+				  SOCKET_ID_ANY);
+	if (!rxq) {
+		PMD_DRV_LOG(ERR, "Failed to allocate memory for "
+					"rx queue structure.");
+		return I40E_ERR_NO_MEMORY;
+	}
+
+	/* Allocate RX hardware ring descriptors. */
+	ring_size = sizeof(union i40e_rx_desc) * I40E_FDIR_NUM_RX_DESC;
+	ring_size = RTE_ALIGN(ring_size, I40E_DMA_MEM_ALIGN);
+
+	rz = i40e_ring_dma_zone_reserve(dev,
+					"fdir_rx_ring",
+					I40E_FDIR_QUEUE_ID,
+					ring_size,
+					SOCKET_ID_ANY);
+	if (!rz) {
+		i40e_dev_rx_queue_release(rxq);
+		PMD_DRV_LOG(ERR, "Failed to reserve DMA memory for RX.");
+		return I40E_ERR_NO_MEMORY;
+	}
+
+	rxq->nb_rx_desc = I40E_FDIR_NUM_RX_DESC;
+	rxq->queue_id = I40E_FDIR_QUEUE_ID;
+	rxq->reg_idx = pf->fdir.fdir_vsi->base_queue;
+	rxq->vsi = pf->fdir.fdir_vsi;
+
+#ifdef RTE_LIBRTE_XEN_DOM0
+	rxq->rx_ring_phys_addr = rte_mem_phy2mch(rz->memseg_id, rz->phys_addr);
+#else
+	rxq->rx_ring_phys_addr = (uint64_t)rz->phys_addr;
+#endif
+	rxq->rx_ring = (union i40e_rx_desc *)rz->addr;
+
+	/*
+	 * Don't need to allocate software ring and reset for the fdir
+	 * rx queue, just set the queue has been configured.
+	 */
+	rxq->q_set = TRUE;
+	pf->fdir.rxq = rxq;
+
+	return I40E_SUCCESS;
 }

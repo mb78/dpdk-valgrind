@@ -145,13 +145,16 @@ enum ixgbe_advctx_num {
 };
 
 /** Offload features */
-union ixgbe_vlan_macip {
-	uint32_t data;
+union ixgbe_tx_offload {
+	uint64_t data;
 	struct {
-		uint16_t l2_l3_len; /**< combined 9-bit l3, 7-bit l2 lengths */
-		uint16_t vlan_tci;
+		uint64_t l2_len:7; /**< L2 (MAC) Header Length. */
+		uint64_t l3_len:9; /**< L3 (IP) Header Length. */
+		uint64_t l4_len:8; /**< L4 (TCP/UDP) Header Length. */
+		uint64_t tso_segsz:16; /**< TCP TSO segment size */
+		uint64_t vlan_tci:16;
 		/**< VLAN Tag Control Identifier (CPU order). */
-	} f;
+	};
 };
 
 /*
@@ -170,8 +173,10 @@ union ixgbe_vlan_macip {
 
 struct ixgbe_advctx_info {
 	uint64_t flags;           /**< ol_flags for context build. */
-	uint32_t cmp_mask;        /**< compare mask for vlan_macip_lens */
-	union ixgbe_vlan_macip vlan_macip_lens; /**< vlan, mac ip length. */
+	/**< tx offload: vlan, tso, l2-l3-l4 lengths. */
+	union ixgbe_tx_offload tx_offload;
+	/** compare mask for tx offload. */
+	union ixgbe_tx_offload tx_offload_mask;
 };
 
 /**
@@ -242,6 +247,13 @@ struct ixgbe_txq_ops {
 			 IXGBE_ADVTXD_DCMD_IFCS |\
 			 IXGBE_ADVTXD_DCMD_DEXT |\
 			 IXGBE_ADVTXD_DCMD_EOP)
+
+
+/* Takes an ethdev and a queue and sets up the tx function to be used based on
+ * the queue parameters. Used in tx_queue_setup by primary process and then
+ * in dev_init by secondary process when attaching to an existing ethdev.
+ */
+void set_tx_function(struct rte_eth_dev *dev, struct igb_tx_queue *txq);
 
 #ifdef RTE_IXGBE_INC_VECTOR
 uint16_t ixgbe_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,

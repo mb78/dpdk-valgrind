@@ -365,7 +365,7 @@ acl_gen_node(struct rte_acl_node *node, uint64_t *node_array,
 }
 
 static int
-acl_calc_counts_indicies(struct acl_node_counters *counts,
+acl_calc_counts_indices(struct acl_node_counters *counts,
 	struct rte_acl_indices *indices, struct rte_acl_trie *trie,
 	struct rte_acl_bld_trie *node_bld_trie, uint32_t num_tries,
 	int match_num)
@@ -410,17 +410,17 @@ rte_acl_gen(struct rte_acl_ctx *ctx, struct rte_acl_trie *trie,
 	struct acl_node_counters counts;
 	struct rte_acl_indices indices;
 
-	/* Fill counts and indicies arrays from the nodes. */
-	match_num = acl_calc_counts_indicies(&counts, &indices, trie,
+	/* Fill counts and indices arrays from the nodes. */
+	match_num = acl_calc_counts_indices(&counts, &indices, trie,
 		node_bld_trie, num_tries, match_num);
 
 	/* Allocate runtime memory (align to cache boundary) */
-	total_size = RTE_ALIGN(data_index_sz, CACHE_LINE_SIZE) +
+	total_size = RTE_ALIGN(data_index_sz, RTE_CACHE_LINE_SIZE) +
 		indices.match_index * sizeof(uint64_t) +
 		(match_num + 2) * sizeof(struct rte_acl_match_results) +
 		XMM_SIZE;
 
-	mem = rte_zmalloc_socket(ctx->name, total_size, CACHE_LINE_SIZE,
+	mem = rte_zmalloc_socket(ctx->name, total_size, RTE_CACHE_LINE_SIZE,
 			ctx->socket_id);
 	if (mem == NULL) {
 		RTE_LOG(ERR, ACL,
@@ -432,7 +432,7 @@ rte_acl_gen(struct rte_acl_ctx *ctx, struct rte_acl_trie *trie,
 	/* Fill the runtime structure */
 	match_index = indices.match_index;
 	node_array = (uint64_t *)((uintptr_t)mem +
-		RTE_ALIGN(data_index_sz, CACHE_LINE_SIZE));
+		RTE_ALIGN(data_index_sz, RTE_CACHE_LINE_SIZE));
 
 	/*
 	 * Setup the NOMATCH node (a SINGLE at the

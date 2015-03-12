@@ -47,14 +47,59 @@
 #define I40E_QUEUE_BASE_ADDR_UNIT 128
 /* number of VSIs and queue default setting */
 #define I40E_MAX_QP_NUM_PER_VF    16
-#define I40E_DEFAULT_QP_NUM_FDIR  64
+#define I40E_DEFAULT_QP_NUM_FDIR  1
 #define I40E_UINT32_BIT_SIZE      (CHAR_BIT * sizeof(uint32_t))
 #define I40E_VFTA_SIZE            (4096 / I40E_UINT32_BIT_SIZE)
+/*
+ * vlan_id is a 12 bit number.
+ * The VFTA array is actually a 4096 bit array, 128 of 32bit elements.
+ * 2^5 = 32. The val of lower 5 bits specifies the bit in the 32bit element.
+ * The higher 7 bit val specifies VFTA array index.
+ */
+#define I40E_VFTA_BIT(vlan_id)    (1 << ((vlan_id) & 0x1F))
+#define I40E_VFTA_IDX(vlan_id)    ((vlan_id) >> 5)
+
 /* Default TC traffic in case DCB is not enabled */
 #define I40E_DEFAULT_TCMAP        0x1
+#define I40E_FDIR_QUEUE_ID        0
 
 /* Always assign pool 0 to main VSI, VMDQ will start from 1 */
 #define I40E_VMDQ_POOL_BASE       1
+
+#define I40E_DEFAULT_RX_FREE_THRESH  32
+#define I40E_DEFAULT_RX_PTHRESH      8
+#define I40E_DEFAULT_RX_HTHRESH      8
+#define I40E_DEFAULT_RX_WTHRESH      0
+
+#define I40E_DEFAULT_TX_FREE_THRESH  32
+#define I40E_DEFAULT_TX_PTHRESH      32
+#define I40E_DEFAULT_TX_HTHRESH      0
+#define I40E_DEFAULT_TX_WTHRESH      0
+#define I40E_DEFAULT_TX_RSBIT_THRESH 32
+
+/* Bit shift and mask */
+#define I40E_4_BIT_WIDTH  (CHAR_BIT / 2)
+#define I40E_4_BIT_MASK   RTE_LEN2MASK(I40E_4_BIT_WIDTH, uint8_t)
+#define I40E_8_BIT_WIDTH  CHAR_BIT
+#define I40E_8_BIT_MASK   UINT8_MAX
+#define I40E_16_BIT_WIDTH (CHAR_BIT * 2)
+#define I40E_16_BIT_MASK  UINT16_MAX
+#define I40E_32_BIT_WIDTH (CHAR_BIT * 4)
+#define I40E_32_BIT_MASK  UINT32_MAX
+#define I40E_48_BIT_WIDTH (CHAR_BIT * 6)
+#define I40E_48_BIT_MASK  RTE_LEN2MASK(I40E_48_BIT_WIDTH, uint64_t)
+
+/* index flex payload per layer */
+enum i40e_flxpld_layer_idx {
+	I40E_FLXPLD_L2_IDX    = 0,
+	I40E_FLXPLD_L3_IDX    = 1,
+	I40E_FLXPLD_L4_IDX    = 2,
+	I40E_MAX_FLXPLD_LAYER = 3,
+};
+#define I40E_MAX_FLXPLD_FIED        3  /* max number of flex payload fields */
+#define I40E_FDIR_BITMASK_NUM_WORD  2  /* max number of bitmask words */
+#define I40E_FDIR_MAX_FLEXWORD_NUM  8  /* max number of flexpayload words */
+#define I40E_FDIR_MAX_FLEX_LEN      16 /* len in bytes of flex payload */
 
 /* i40e flags */
 #define I40E_FLAG_RSS                   (1ULL << 0)
@@ -243,6 +288,42 @@ struct i40e_vmdq_info {
 };
 
 /*
+ * Structure to store flex pit for flow diretor.
+ */
+struct i40e_fdir_flex_pit {
+	uint8_t src_offset;    /* offset in words from the beginning of payload */
+	uint8_t size;          /* size in words */
+	uint8_t dst_offset;    /* offset in words of flexible payload */
+};
+
+struct i40e_fdir_flex_mask {
+	uint8_t word_mask;  /**< Bit i enables word i of flexible payload */
+	struct {
+		uint8_t offset;
+		uint16_t mask;
+	} bitmask[I40E_FDIR_BITMASK_NUM_WORD];
+};
+
+#define I40E_FILTER_PCTYPE_MAX 64
+/*
+ *  A structure used to define fields of a FDIR related info.
+ */
+struct i40e_fdir_info {
+	struct i40e_vsi *fdir_vsi;     /* pointer to fdir VSI structure */
+	uint16_t match_counter_index;  /* Statistic counter index used for fdir*/
+	struct i40e_tx_queue *txq;
+	struct i40e_rx_queue *rxq;
+	void *prg_pkt;                 /* memory for fdir program packet */
+	uint64_t dma_addr;             /* physic address of packet memory*/
+	/*
+	 * the rule how bytes stream is extracted as flexible payload
+	 * for each payload layer, the setting can up to three elements
+	 */
+	struct i40e_fdir_flex_pit flex_set[I40E_MAX_FLXPLD_LAYER * I40E_MAX_FLXPLD_FIED];
+	struct i40e_fdir_flex_mask flex_mask[I40E_FILTER_PCTYPE_MAX];
+};
+
+/*
  * Structure to store private data specific for PF instance.
  */
 struct i40e_pf {
@@ -270,7 +351,7 @@ struct i40e_pf {
 	uint16_t vmdq_nb_qps; /* The number of queue pairs of VMDq */
 	uint16_t vf_nb_qps; /* The number of queue pairs of VF */
 	uint16_t fdir_nb_qps; /* The number of queue pairs of Flow Director */
-
+	uint16_t hash_lut_size; /* The size of hash lookup table */
 	/* store VXLAN UDP ports */
 	uint16_t vxlan_ports[I40E_MAX_PF_UDP_OFFLOAD_PORTS];
 	uint16_t vxlan_bitmap; /* Vxlan bit mask */
@@ -279,6 +360,8 @@ struct i40e_pf {
 	uint16_t max_nb_vmdq_vsi; /* Max number of VMDQ VSIs supported */
 	uint16_t nb_cfg_vmdq_vsi; /* number of VMDQ VSIs configured */
 	struct i40e_vmdq_info *vmdq;
+
+	struct i40e_fdir_info fdir; /* flow director info */
 };
 
 enum pending_msg {
@@ -380,6 +463,21 @@ int i40e_vsi_vlan_pvid_set(struct i40e_vsi *vsi,
 int i40e_vsi_config_vlan_stripping(struct i40e_vsi *vsi, bool on);
 uint64_t i40e_config_hena(uint64_t flags);
 uint64_t i40e_parse_hena(uint64_t flags);
+enum i40e_status_code i40e_fdir_setup_tx_resources(struct i40e_pf *pf);
+enum i40e_status_code i40e_fdir_setup_rx_resources(struct i40e_pf *pf);
+int i40e_fdir_setup(struct i40e_pf *pf);
+const struct rte_memzone *i40e_memzone_reserve(const char *name,
+					uint32_t len,
+					int socket_id);
+int i40e_fdir_configure(struct rte_eth_dev *dev);
+void i40e_fdir_teardown(struct i40e_pf *pf);
+enum i40e_filter_pctype i40e_flowtype_to_pctype(
+				enum rte_eth_flow_type flow_type);
+enum rte_eth_flow_type i40e_pctype_to_flowtype(
+				enum i40e_filter_pctype pctype);
+int i40e_fdir_ctrl_func(struct rte_eth_dev *dev,
+			  enum rte_filter_op filter_op,
+			  void *arg);
 
 /* I40E_DEV_PRIVATE_TO */
 #define I40E_DEV_PRIVATE_TO_PF(adapter) \
@@ -441,5 +539,29 @@ i40e_init_adminq_parameter(struct i40e_hw *hw)
 	hw->aq.arq_buf_size = I40E_AQ_BUF_SZ;
 	hw->aq.asq_buf_size = I40E_AQ_BUF_SZ;
 }
+
+#define I40E_VALID_FLOW_TYPE(flow_type) \
+	((flow_type) == RTE_ETH_FLOW_TYPE_UDPV4 || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_TCPV4 || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_SCTPV4 || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_IPV4_OTHER || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_FRAG_IPV4 || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_UDPV6 || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_TCPV6 || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_SCTPV6 || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_IPV6_OTHER || \
+	(flow_type) == RTE_ETH_FLOW_TYPE_FRAG_IPV6)
+
+#define I40E_VALID_PCTYPE(pctype) \
+	((pctype) == I40E_FILTER_PCTYPE_NONF_IPV4_UDP || \
+	(pctype) == I40E_FILTER_PCTYPE_NONF_IPV4_TCP || \
+	(pctype) == I40E_FILTER_PCTYPE_NONF_IPV4_SCTP || \
+	(pctype) == I40E_FILTER_PCTYPE_NONF_IPV4_OTHER || \
+	(pctype) == I40E_FILTER_PCTYPE_FRAG_IPV4 || \
+	(pctype) == I40E_FILTER_PCTYPE_NONF_IPV6_UDP || \
+	(pctype) == I40E_FILTER_PCTYPE_NONF_IPV6_TCP || \
+	(pctype) == I40E_FILTER_PCTYPE_NONF_IPV6_SCTP || \
+	(pctype) == I40E_FILTER_PCTYPE_NONF_IPV6_OTHER || \
+	(pctype) == I40E_FILTER_PCTYPE_FRAG_IPV6)
 
 #endif /* _I40E_ETHDEV_H_ */

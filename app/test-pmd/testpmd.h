@@ -34,12 +34,6 @@
 #ifndef _TESTPMD_H_
 #define _TESTPMD_H_
 
-/* icc on baremetal gives us troubles with function named 'main' */
-#ifdef RTE_EXEC_ENV_BAREMETAL
-#define main _main
-int main(int argc, char **argv);
-#endif
-
 #define RTE_PORT_ALL            (~(portid_t)0x0)
 
 #define RTE_TEST_RX_DESC_MAX    2048
@@ -67,8 +61,8 @@ int main(int argc, char **argv);
 
 #define DEF_MBUF_CACHE 250
 
-#define CACHE_LINE_SIZE_ROUNDUP(size) \
-	(CACHE_LINE_SIZE * ((size + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE))
+#define RTE_CACHE_LINE_SIZE_ROUNDUP(size) \
+	(RTE_CACHE_LINE_SIZE * ((size + RTE_CACHE_LINE_SIZE - 1) / RTE_CACHE_LINE_SIZE))
 
 #define NUMA_NO_CONFIG 0xFF
 #define UMA_NO_CONFIG  0xFF
@@ -123,14 +117,21 @@ struct fwd_stream {
 #endif
 };
 
+/** Offload IP checksum in csum forward engine */
+#define TESTPMD_TX_OFFLOAD_IP_CKSUM          0x0001
+/** Offload UDP checksum in csum forward engine */
+#define TESTPMD_TX_OFFLOAD_UDP_CKSUM         0x0002
+/** Offload TCP checksum in csum forward engine */
+#define TESTPMD_TX_OFFLOAD_TCP_CKSUM         0x0004
+/** Offload SCTP checksum in csum forward engine */
+#define TESTPMD_TX_OFFLOAD_SCTP_CKSUM        0x0008
+/** Offload VxLAN checksum in csum forward engine */
+#define TESTPMD_TX_OFFLOAD_VXLAN_CKSUM       0x0010
+/** Insert VLAN header in forward engine */
+#define TESTPMD_TX_OFFLOAD_INSERT_VLAN       0x0020
+
 /**
  * The data structure associated with each port.
- * tx_ol_flags is slightly different from ol_flags of rte_mbuf.
- *   Bit  0: Insert IP checksum
- *   Bit  1: Insert UDP checksum
- *   Bit  2: Insert TCP checksum
- *   Bit  3: Insert SCTP checksum
- *   Bit 11: Insert VLAN Label
  */
 struct rte_port {
 	struct rte_eth_dev_info dev_info;   /**< PCI info + driver name */
@@ -141,7 +142,8 @@ struct rte_port {
 	struct fwd_stream       *rx_stream; /**< Port RX stream, if unique */
 	struct fwd_stream       *tx_stream; /**< Port TX stream, if unique */
 	unsigned int            socket_id;  /**< For NUMA support */
-	uint64_t                tx_ol_flags;/**< Offload Flags of TX packets. */
+	uint16_t                tx_ol_flags;/**< TX Offload Flags (TESTPMD_TX_OFFLOAD...). */
+	uint16_t                tso_segsz;  /**< MSS for segmentation offload. */
 	uint16_t                tx_vlan_id; /**< Tag Id. in TX VLAN packets. */
 	void                    *fwd_ctx;   /**< Forwarding mode context */
 	uint64_t                rx_bad_ip_csum; /**< rx pkts with bad ip checksum  */
@@ -457,7 +459,7 @@ void fwd_config_display(void);
 void rxtx_config_display(void);
 void fwd_config_setup(void);
 void set_def_fwd_config(void);
-void reconfig(portid_t new_port_id);
+void reconfig(portid_t new_port_id, unsigned socket_id);
 int init_fwd_streams(void);
 
 void port_mtu_set(portid_t port_id, uint16_t mtu);
@@ -496,8 +498,6 @@ void tx_vlan_pvid_set(portid_t port_id, uint16_t vlan_id, int on);
 
 void set_qmap(portid_t port_id, uint8_t is_rx, uint16_t queue_id, uint8_t map_value);
 
-void tx_cksum_set(portid_t port_id, uint64_t ol_flags);
-
 void set_verbose_level(uint16_t vb_level);
 void set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs);
 void set_nb_pkt_per_burst(uint16_t pkt_burst);
@@ -532,8 +532,13 @@ void fdir_update_perfect_filter(portid_t port_id, uint16_t soft_id,
 void fdir_remove_perfect_filter(portid_t port_id, uint16_t soft_id,
 				struct rte_fdir_filter *fdir_filter);
 void fdir_set_masks(portid_t port_id, struct rte_fdir_masks *fdir_masks);
-
-void port_rss_reta_info(portid_t port_id, struct rte_eth_rss_reta *reta_conf);
+void fdir_set_flex_mask(portid_t port_id,
+			   struct rte_eth_fdir_flex_mask *cfg);
+void fdir_set_flex_payload(portid_t port_id,
+			   struct rte_eth_flex_payload_cfg *cfg);
+void port_rss_reta_info(portid_t port_id,
+			struct rte_eth_rss_reta_entry64 *reta_conf,
+			uint16_t nb_entries);
 
 void set_vf_traffic(portid_t port_id, uint8_t is_rx, uint16_t vf, uint8_t on);
 void set_vf_rx_vlan(portid_t port_id, uint16_t vlan_id,
@@ -562,7 +567,7 @@ int tx_queue_id_is_invalid(queueid_t txq_id);
 #define RTE_BE_TO_CPU_16(be_16_v)  rte_be_to_cpu_16((be_16_v))
 #define RTE_CPU_TO_BE_16(cpu_16_v) rte_cpu_to_be_16((cpu_16_v))
 #else
-#ifdef __big_endian__
+#if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
 #define RTE_BE_TO_CPU_16(be_16_v)  (be_16_v)
 #define RTE_CPU_TO_BE_16(cpu_16_v) (cpu_16_v)
 #else

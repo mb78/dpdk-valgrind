@@ -2,6 +2,7 @@
  *   BSD LICENSE
  *
  *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
+ *   Copyright 2014 6WIND S.A.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -54,6 +55,7 @@
 
 #include <stdint.h>
 #include <rte_mempool.h>
+#include <rte_memory.h>
 #include <rte_atomic.h>
 #include <rte_prefetch.h>
 #include <rte_branch_prediction.h>
@@ -74,10 +76,13 @@ extern "C" {
  * - The most-significant 8 bits are reserved for generic mbuf flags
  * - TX flags therefore start at bit position 55 (i.e. 63-8), and new flags get
  *   added to the right of the previously defined flags
+ *
+ * Keep these flags synchronized with rte_get_rx_ol_flag_name() and
+ * rte_get_tx_ol_flag_name().
  */
 #define PKT_RX_VLAN_PKT      (1ULL << 0)  /**< RX packet is a 802.1q VLAN packet. */
 #define PKT_RX_RSS_HASH      (1ULL << 1)  /**< RX packet with RSS hash result. */
-#define PKT_RX_FDIR          (1ULL << 2)  /**< RX packet with FDIR infos. */
+#define PKT_RX_FDIR          (1ULL << 2)  /**< RX packet with FDIR match indicate. */
 #define PKT_RX_L4_CKSUM_BAD  (1ULL << 3)  /**< L4 cksum of RX pkt. is not OK. */
 #define PKT_RX_IP_CKSUM_BAD  (1ULL << 4)  /**< IP cksum of RX pkt. is not OK. */
 #define PKT_RX_EIP_CKSUM_BAD (0ULL << 0)  /**< External IP header checksum error. */
@@ -93,20 +98,42 @@ extern "C" {
 #define PKT_RX_IEEE1588_TMST (1ULL << 10) /**< RX IEEE1588 L2/L4 timestamped packet.*/
 #define PKT_RX_TUNNEL_IPV4_HDR (1ULL << 11) /**< RX tunnel packet with IPv4 header.*/
 #define PKT_RX_TUNNEL_IPV6_HDR (1ULL << 12) /**< RX tunnel packet with IPv6 header. */
+#define PKT_RX_FDIR_ID       (1ULL << 13) /**< FD id reported if FDIR match. */
+#define PKT_RX_FDIR_FLX      (1ULL << 14) /**< Flexible bytes reported if FDIR match. */
+/* add new RX flags here */
 
-#define PKT_TX_VLAN_PKT      (1ULL << 55) /**< TX packet is a 802.1q VLAN packet. */
-#define PKT_TX_IP_CKSUM      (1ULL << 54) /**< IP cksum of TX pkt. computed by NIC. */
-#define PKT_TX_VXLAN_CKSUM   (1ULL << 50) /**< TX checksum of VXLAN computed by NIC */
-#define PKT_TX_IPV4_CSUM     PKT_TX_IP_CKSUM /**< Alias of PKT_TX_IP_CKSUM. */
-#define PKT_TX_IPV4          PKT_RX_IPV4_HDR /**< IPv4 with no IP checksum offload. */
-#define PKT_TX_IPV6          PKT_RX_IPV6_HDR /**< IPv6 packet */
+/* add new TX flags here */
 
-/*
- * Bits 52+53 used for L4 packet type with checksum enabled.
- *     00: Reserved
- *     01: TCP checksum
- *     10: SCTP checksum
- *     11: UDP checksum
+/**
+ * TCP segmentation offload. To enable this offload feature for a
+ * packet to be transmitted on hardware supporting TSO:
+ *  - set the PKT_TX_TCP_SEG flag in mbuf->ol_flags (this flag implies
+ *    PKT_TX_TCP_CKSUM)
+ *  - set the flag PKT_TX_IPV4 or PKT_TX_IPV6
+ *  - if it's IPv4, set the PKT_TX_IP_CKSUM flag and write the IP checksum
+ *    to 0 in the packet
+ *  - fill the mbuf offload information: l2_len, l3_len, l4_len, tso_segsz
+ *  - calculate the pseudo header checksum without taking ip_len in account,
+ *    and set it in the TCP header. Refer to rte_ipv4_phdr_cksum() and
+ *    rte_ipv6_phdr_cksum() that can be used as helpers.
+ */
+#define PKT_TX_TCP_SEG       (1ULL << 49)
+
+/** TX packet is an UDP tunneled packet. It must be specified when using
+ *  outer checksum offload (PKT_TX_OUTER_IP_CKSUM) */
+#define PKT_TX_UDP_TUNNEL_PKT (1ULL << 50) /**< TX packet is an UDP tunneled packet */
+#define PKT_TX_IEEE1588_TMST (1ULL << 51) /**< TX IEEE1588 packet to timestamp. */
+
+/**
+ * Bits 52+53 used for L4 packet type with checksum enabled: 00: Reserved,
+ * 01: TCP checksum, 10: SCTP checksum, 11: UDP checksum. To use hardware
+ * L4 checksum offload, the user needs to:
+ *  - fill l2_len and l3_len in mbuf
+ *  - set the flags PKT_TX_TCP_CKSUM, PKT_TX_SCTP_CKSUM or PKT_TX_UDP_CKSUM
+ *  - set the flag PKT_TX_IPV4 or PKT_TX_IPV6
+ *  - calculate the pseudo header checksum and set it in the L4 header (only
+ *    for TCP or UDP). See rte_ipv4_phdr_cksum() and rte_ipv6_phdr_cksum().
+ *    For SCTP, set the crc field to 0.
  */
 #define PKT_TX_L4_NO_CKSUM   (0ULL << 52) /**< Disable L4 cksum of TX pkt. */
 #define PKT_TX_TCP_CKSUM     (1ULL << 52) /**< TCP cksum of TX pkt. computed by NIC. */
@@ -114,22 +141,59 @@ extern "C" {
 #define PKT_TX_UDP_CKSUM     (3ULL << 52) /**< UDP cksum of TX pkt. computed by NIC. */
 #define PKT_TX_L4_MASK       (3ULL << 52) /**< Mask for L4 cksum offload request. */
 
-/* Bit 51 - IEEE1588*/
-#define PKT_TX_IEEE1588_TMST (1ULL << 51) /**< TX IEEE1588 packet to timestamp. */
+#define PKT_TX_IP_CKSUM      (1ULL << 54) /**< IP cksum of TX pkt. computed by NIC. */
+#define PKT_TX_IPV4_CSUM     PKT_TX_IP_CKSUM /**< Alias of PKT_TX_IP_CKSUM. */
+
+/** Packet is IPv4 without requiring IP checksum offload. */
+#define PKT_TX_IPV4          (1ULL << 55)
+
+/** Tell the NIC it's an IPv6 packet.*/
+#define PKT_TX_IPV6          (1ULL << 56)
+
+#define PKT_TX_VLAN_PKT      (1ULL << 57) /**< TX packet is a 802.1q VLAN packet. */
+
+/** Outer IP checksum of TX packet, computed by NIC for tunneling packet.
+ *  The tunnel type must also be specified, ex: PKT_TX_UDP_TUNNEL_PKT. */
+#define PKT_TX_OUTER_IP_CKSUM   (1ULL << 58)
+
+/** Packet is outer IPv4 without requiring IP checksum offload for tunneling packet. */
+#define PKT_TX_OUTER_IPV4   (1ULL << 59)
+
+/** Tell the NIC it's an outer IPv6 packet for tunneling packet */
+#define PKT_TX_OUTER_IPV6    (1ULL << 60)
 
 /* Use final bit of flags to indicate a control mbuf */
 #define CTRL_MBUF_FLAG       (1ULL << 63) /**< Mbuf contains control data */
 
 /**
- * Bit Mask to indicate what bits required for building TX context
+ * Get the name of a RX offload flag
+ *
+ * @param mask
+ *   The mask describing the flag.
+ * @return
+ *   The name of this flag, or NULL if it's not a valid RX flag.
  */
-#define PKT_TX_OFFLOAD_MASK (PKT_TX_VLAN_PKT | PKT_TX_IP_CKSUM | PKT_TX_L4_MASK)
+const char *rte_get_rx_ol_flag_name(uint64_t mask);
+
+/**
+ * Get the name of a TX offload flag
+ *
+ * @param mask
+ *   The mask describing the flag. Usually only one bit must be set.
+ *   Several bits can be given if they belong to the same mask.
+ *   Ex: PKT_TX_L4_MASK.
+ * @return
+ *   The name of this flag, or NULL if it's not a valid TX flag.
+ */
+const char *rte_get_tx_ol_flag_name(uint64_t mask);
 
 /* define a set of marker types that can be used to refer to set points in the
  * mbuf */
 typedef void    *MARKER[0];   /**< generic marker for a point in a structure */
+typedef uint8_t  MARKER8[0];  /**< generic marker with 1B alignment */
 typedef uint64_t MARKER64[0]; /**< marker that allows us to overwrite 8 bytes
                                * with a single assignment */
+
 /**
  * The generic rte_mbuf, containing a packet mbuf.
  */
@@ -139,9 +203,10 @@ struct rte_mbuf {
 	void *buf_addr;           /**< Virtual address of segment buffer. */
 	phys_addr_t buf_physaddr; /**< Physical address of segment buffer. */
 
-	/* next 8 bytes are initialised on RX descriptor rearm */
-	MARKER64 rearm_data;
 	uint16_t buf_len;         /**< Length of segment buffer. */
+
+	/* next 6 bytes are initialised on RX descriptor rearm */
+	MARKER8 rearm_data;
 	uint16_t data_off;
 
 	/**
@@ -181,8 +246,17 @@ struct rte_mbuf {
 	union {
 		uint32_t rss;     /**< RSS hash result if RSS enabled */
 		struct {
-			uint16_t hash;
-			uint16_t id;
+			union {
+				struct {
+					uint16_t hash;
+					uint16_t id;
+				};
+				uint32_t lo;
+				/**< Second 4 flexible bytes */
+			};
+			uint32_t hi;
+			/**< First 4 flexible bytes or FD ID, dependent on
+			     PKT_RX_FDIR_* flag in ol_flags. */
 		} fdir;           /**< Filter identifier if FDIR enabled */
 		uint32_t sched;   /**< Hierarchical scheduler */
 		uint32_t usr;	  /**< User defined tags. See @rte_distributor_process */
@@ -201,22 +275,18 @@ struct rte_mbuf {
 
 	/* fields to support TX offloads */
 	union {
-		uint16_t l2_l3_len; /**< combined l2/l3 lengths as single var */
+		uint64_t tx_offload;       /**< combined for easy fetch */
 		struct {
-			uint16_t l3_len:9;      /**< L3 (IP) Header Length. */
-			uint16_t l2_len:7;      /**< L2 (MAC) Header Length. */
-		};
-	};
+			uint64_t l2_len:7; /**< L2 (MAC) Header Length. */
+			uint64_t l3_len:9; /**< L3 (IP) Header Length. */
+			uint64_t l4_len:8; /**< L4 (TCP/UDP) Header Length. */
+			uint64_t tso_segsz:16; /**< TCP TSO segment size */
 
-	/* fields for TX offloading of tunnels */
-	union {
-		uint16_t inner_l2_l3_len;
-		/**< combined inner l2/l3 lengths as single var */
-		struct {
-			uint16_t inner_l3_len:9;
-			/**< inner L3 (IP) Header Length. */
-			uint16_t inner_l2_len:7;
-			/**< inner L2 (MAC) Header Length. */
+			/* fields for TX offloading of tunnels */
+			uint64_t outer_l3_len:9; /**< Outer L3 (IP) Hdr Length. */
+			uint64_t outer_l2_len:7; /**< Outer L2 (MAC) Hdr Length. */
+
+			/* uint64_t unused:8; */
 		};
 	};
 } __rte_cache_aligned;
@@ -568,8 +638,7 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 {
 	m->next = NULL;
 	m->pkt_len = 0;
-	m->l2_l3_len = 0;
-	m->inner_l2_l3_len = 0;
+	m->tx_offload = 0;
 	m->vlan_tci = 0;
 	m->nb_segs = 1;
 	m->port = 0xff;
@@ -638,8 +707,7 @@ static inline void rte_pktmbuf_attach(struct rte_mbuf *mi, struct rte_mbuf *md)
 	mi->data_len = md->data_len;
 	mi->port = md->port;
 	mi->vlan_tci = md->vlan_tci;
-	mi->l2_l3_len = md->l2_l3_len;
-	mi->inner_l2_l3_len = md->inner_l2_l3_len;
+	mi->tx_offload = md->tx_offload;
 	mi->hash = md->hash;
 
 	mi->next = NULL;

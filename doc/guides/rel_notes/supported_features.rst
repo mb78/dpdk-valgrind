@@ -31,6 +31,28 @@
 Supported Features
 ==================
 
+*   Packet Distributor library for dynamic, single-packet at a time, load balancing
+
+*   IP fragmentation and reassembly library
+
+*   Support for IPv6 in IP fragmentation and reassembly sample applications
+
+*   Support for VFIO for mapping BARs and setting up interrupts
+
+*   Link Bonding PMD Library supporting round-robin, active backup, balance(layer 2, layer 2+3, and layer 3+4) and broadcast bonding modes
+
+*   Support zero copy mode RX/TX in user space vhost sample
+
+*   Support multiple queues in virtio-net PMD
+
+*   Support for Intel 40GbE Controllers:
+
+    *   Intel® XL710 40 Gigabit Ethernet Controller
+
+    *   Intel® X710 40 Gigabit Ethernet Controller
+
+*   Support NIC filters in addition to flow director for Intel� 1GbE and 10GbE Controllers
+
 *   Virtualization (KVM)
 
     *   Userspace vhost switch:
@@ -39,7 +61,7 @@ Supported Features
 
 *   Virtualization (Xen)
 
-    *   Support for Intel® DPDK application running on Xen Domain0 without hugepages.
+    *   Support for DPDK application running on Xen Domain0 without hugepages.
 
     *   Para-virtualization
 
@@ -48,7 +70,7 @@ Supported Features
         Support userspace packet switching back-end example in host domain
 
 *   FreeBSD* 9.2 support for librte_pmd_e1000, librte_pmd_ixgbe and Virtual Function variants.
-    Please refer to the *Intel® DPDK for FreeBSD\* Getting Started Guide*.
+    Please refer to the *DPDK for FreeBSD\* Getting Started Guide*.
     Application support has been added for the following:
 
     *   multiprocess/symmetric_mp
@@ -65,7 +87,7 @@ Supported Features
 
 *   New VMXNET3 driver for the paravirtual device presented to a VM by the VMware* ESXi Hypervisor.
 
-*   BETA: example support for basic Netmap applications on Intel® DPDK
+*   BETA: example support for basic Netmap applications on DPDK
 
 *   Support for the wireless KASUMI algorithm in the dpdk_qat sample application
 
@@ -135,7 +157,7 @@ Supported Features
 
 *   Improved scalability for scheduling large numbers of timers using the rte_timer library
 
-*   Support for building the Intel® DPDK as a shared library
+*   Support for building the DPDK as a shared library
 
 *   Support for Intel® Ethernet Server Bypass Adapter X520-SR2
 
@@ -340,7 +362,7 @@ Supported Features
 
 *   Header files for common protocols (IP, SCTP, TCP, UDP)
 
-*   Improved multi-process application support, allowing multiple co-operating Intel® DPDK
+*   Improved multi-process application support, allowing multiple co-operating DPDK
     processes to access the NIC port queues directly.
 
 *   CPU-specific compiler optimization
@@ -360,3 +382,8 @@ Supported Features
     *   Exact match flow classification in the L3 Forwarding sample application
 
     *   Support in LPM for IPv6 addresses
+
+* Tunneling packet support:
+
+    *   Provide the APIs for VXLAN destination UDP port and VXLAN packet filter configuration
+        and support VXLAN TX checksum offload on Intel® 40GbE Controllers.

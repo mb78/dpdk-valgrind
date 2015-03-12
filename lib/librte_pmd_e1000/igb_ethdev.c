@@ -69,6 +69,12 @@
 #define IGB_DEFAULT_TX_HTHRESH      0
 #define IGB_DEFAULT_TX_WTHRESH      0
 
+/* Bit shift and mask */
+#define IGB_4_BIT_WIDTH  (CHAR_BIT / 2)
+#define IGB_4_BIT_MASK   RTE_LEN2MASK(IGB_4_BIT_WIDTH, uint8_t)
+#define IGB_8_BIT_WIDTH  CHAR_BIT
+#define IGB_8_BIT_MASK   UINT8_MAX
+
 static int  eth_igb_configure(struct rte_eth_dev *dev);
 static int  eth_igb_start(struct rte_eth_dev *dev);
 static void eth_igb_stop(struct rte_eth_dev *dev);
@@ -83,6 +89,8 @@ static void eth_igb_stats_get(struct rte_eth_dev *dev,
 				struct rte_eth_stats *rte_stats);
 static void eth_igb_stats_reset(struct rte_eth_dev *dev);
 static void eth_igb_infos_get(struct rte_eth_dev *dev,
+			      struct rte_eth_dev_info *dev_info);
+static void eth_igbvf_infos_get(struct rte_eth_dev *dev,
 				struct rte_eth_dev_info *dev_info);
 static int  eth_igb_flow_ctrl_get(struct rte_eth_dev *dev,
 				struct rte_eth_fc_conf *fc_conf);
@@ -136,10 +144,11 @@ static int igbvf_vlan_filter_set(struct rte_eth_dev *dev,
 static int igbvf_set_vfta(struct e1000_hw *hw, uint16_t vid, bool on);
 static void igbvf_set_vfta_all(struct rte_eth_dev *dev, bool on);
 static int eth_igb_rss_reta_update(struct rte_eth_dev *dev,
-		 struct rte_eth_rss_reta *reta_conf);
+				   struct rte_eth_rss_reta_entry64 *reta_conf,
+				   uint16_t reta_size);
 static int eth_igb_rss_reta_query(struct rte_eth_dev *dev,
-		struct rte_eth_rss_reta *reta_conf);
-
+				  struct rte_eth_rss_reta_entry64 *reta_conf,
+				  uint16_t reta_size);
 static int eth_igb_add_syn_filter(struct rte_eth_dev *dev,
 			struct rte_syn_filter *filter, uint16_t rx_queue);
 static int eth_igb_remove_syn_filter(struct rte_eth_dev *dev);
@@ -282,7 +291,7 @@ static struct eth_dev_ops igbvf_eth_dev_ops = {
 	.stats_get            = eth_igbvf_stats_get,
 	.stats_reset          = eth_igbvf_stats_reset,
 	.vlan_filter_set      = igbvf_vlan_filter_set,
-	.dev_infos_get        = eth_igb_infos_get,
+	.dev_infos_get        = eth_igbvf_infos_get,
 	.rx_queue_setup       = eth_igb_rx_queue_setup,
 	.rx_queue_release     = eth_igb_rx_queue_release,
 	.tx_queue_setup       = eth_igb_tx_queue_setup,
@@ -1268,8 +1277,7 @@ eth_igbvf_stats_reset(struct rte_eth_dev *dev)
 }
 
 static void
-eth_igb_infos_get(struct rte_eth_dev *dev,
-		    struct rte_eth_dev_info *dev_info)
+eth_igb_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
@@ -1333,23 +1341,61 @@ eth_igb_infos_get(struct rte_eth_dev *dev,
 		dev_info->max_vmdq_pools = 0;
 		break;
 
+	default:
+		/* Should not happen */
+		break;
+	}
+	dev_info->reta_size = ETH_RSS_RETA_SIZE_128;
+
+	dev_info->default_rxconf = (struct rte_eth_rxconf) {
+		.rx_thresh = {
+			.pthresh = IGB_DEFAULT_RX_PTHRESH,
+			.hthresh = IGB_DEFAULT_RX_HTHRESH,
+			.wthresh = IGB_DEFAULT_RX_WTHRESH,
+		},
+		.rx_free_thresh = IGB_DEFAULT_RX_FREE_THRESH,
+		.rx_drop_en = 0,
+	};
+
+	dev_info->default_txconf = (struct rte_eth_txconf) {
+		.tx_thresh = {
+			.pthresh = IGB_DEFAULT_TX_PTHRESH,
+			.hthresh = IGB_DEFAULT_TX_HTHRESH,
+			.wthresh = IGB_DEFAULT_TX_WTHRESH,
+		},
+		.txq_flags = 0,
+	};
+}
+
+static void
+eth_igbvf_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
+{
+	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	dev_info->min_rx_bufsize = 256; /* See BSIZE field of RCTL register. */
+	dev_info->max_rx_pktlen  = 0x3FFF; /* See RLPML register. */
+	dev_info->max_mac_addrs = hw->mac.rar_entry_count;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP |
+				DEV_RX_OFFLOAD_IPV4_CKSUM |
+				DEV_RX_OFFLOAD_UDP_CKSUM  |
+				DEV_RX_OFFLOAD_TCP_CKSUM;
+	dev_info->tx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT |
+				DEV_TX_OFFLOAD_IPV4_CKSUM  |
+				DEV_TX_OFFLOAD_UDP_CKSUM   |
+				DEV_TX_OFFLOAD_TCP_CKSUM   |
+				DEV_TX_OFFLOAD_SCTP_CKSUM;
+	switch (hw->mac.type) {
 	case e1000_vfadapt:
 		dev_info->max_rx_queues = 2;
 		dev_info->max_tx_queues = 2;
-		dev_info->max_vmdq_pools = 0;
 		break;
-
 	case e1000_vfadapt_i350:
 		dev_info->max_rx_queues = 1;
 		dev_info->max_tx_queues = 1;
-		dev_info->max_vmdq_pools = 0;
 		break;
-
 	default:
 		/* Should not happen */
-		dev_info->max_rx_queues = 0;
-		dev_info->max_tx_queues = 0;
-		dev_info->max_vmdq_pools = 0;
+		break;
 	}
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
@@ -2051,7 +2097,7 @@ igbvf_stop_adapter(struct rte_eth_dev *dev)
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	memset(&dev_info, 0, sizeof(dev_info));
-	eth_igb_infos_get(dev, &dev_info);
+	eth_igbvf_infos_get(dev, &dev_info);
 
 	/* Clear interrupt mask to stop from interrupts being generated */
 	igbvf_intr_disable(hw);
@@ -2264,38 +2310,40 @@ igbvf_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 
 static int
 eth_igb_rss_reta_update(struct rte_eth_dev *dev,
-                                struct rte_eth_rss_reta *reta_conf)
+			struct rte_eth_rss_reta_entry64 *reta_conf,
+			uint16_t reta_size)
 {
-	uint8_t i,j,mask;
-	uint32_t reta;
-	struct e1000_hw *hw =
-			E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	uint8_t i, j, mask;
+	uint32_t reta, r;
+	uint16_t idx, shift;
+	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	/*
-	 * Update Redirection Table RETA[n],n=0...31,The redirection table has
-	 * 128-entries in 32 registers
-	 */
-	for(i = 0; i < ETH_RSS_RETA_NUM_ENTRIES; i += 4) {
-		if (i < ETH_RSS_RETA_NUM_ENTRIES/2)
-			mask = (uint8_t)((reta_conf->mask_lo >> i) & 0xF);
+	if (reta_size != ETH_RSS_RETA_SIZE_128) {
+		PMD_DRV_LOG(ERR, "The size of hash lookup table configured "
+			"(%d) doesn't match the number hardware can supported "
+			"(%d)\n", reta_size, ETH_RSS_RETA_SIZE_128);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < reta_size; i += IGB_4_BIT_WIDTH) {
+		idx = i / RTE_RETA_GROUP_SIZE;
+		shift = i % RTE_RETA_GROUP_SIZE;
+		mask = (uint8_t)((reta_conf[idx].mask >> shift) &
+						IGB_4_BIT_MASK);
+		if (!mask)
+			continue;
+		if (mask == IGB_4_BIT_MASK)
+			r = 0;
 		else
-			mask = (uint8_t)((reta_conf->mask_hi >>
-				(i - ETH_RSS_RETA_NUM_ENTRIES/2)) & 0xF);
-		if (mask != 0) {
-			reta = 0;
-			/* If all 4 entries were set,don't need read RETA register */
-			if (mask != 0xF)
-				reta = E1000_READ_REG(hw,E1000_RETA(i >> 2));
-
-			for (j = 0; j < 4; j++) {
-				if (mask & (0x1 << j)) {
-					if (mask != 0xF)
-						reta &= ~(0xFF << 8 * j);
-					reta |= reta_conf->reta[i + j] << 8 * j;
-				}
-			}
-			E1000_WRITE_REG(hw, E1000_RETA(i >> 2),reta);
+			r = E1000_READ_REG(hw, E1000_RETA(i >> 2));
+		for (j = 0, reta = 0; j < IGB_4_BIT_WIDTH; j++) {
+			if (mask & (0x1 << j))
+				reta |= reta_conf[idx].reta[shift + j] <<
+							(CHAR_BIT * j);
+			else
+				reta |= r & (IGB_8_BIT_MASK << (CHAR_BIT * j));
 		}
+		E1000_WRITE_REG(hw, E1000_RETA(i >> 2), reta);
 	}
 
 	return 0;
@@ -2303,31 +2351,34 @@ eth_igb_rss_reta_update(struct rte_eth_dev *dev,
 
 static int
 eth_igb_rss_reta_query(struct rte_eth_dev *dev,
-                                struct rte_eth_rss_reta *reta_conf)
+		       struct rte_eth_rss_reta_entry64 *reta_conf,
+		       uint16_t reta_size)
 {
-	uint8_t i,j,mask;
+	uint8_t i, j, mask;
 	uint32_t reta;
-	struct e1000_hw *hw =
-			E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	uint16_t idx, shift;
+	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	/*
-	 * Read Redirection Table RETA[n],n=0...31,The redirection table has
-	 * 128-entries in 32 registers
-	 */
-	for(i = 0; i < ETH_RSS_RETA_NUM_ENTRIES; i += 4) {
-		if (i < ETH_RSS_RETA_NUM_ENTRIES/2)
-			mask = (uint8_t)((reta_conf->mask_lo >> i) & 0xF);
-		else
-			mask = (uint8_t)((reta_conf->mask_hi >>
-				(i - ETH_RSS_RETA_NUM_ENTRIES/2)) & 0xF);
+	if (reta_size != ETH_RSS_RETA_SIZE_128) {
+		PMD_DRV_LOG(ERR, "The size of hash lookup table configured "
+			"(%d) doesn't match the number hardware can supported "
+			"(%d)\n", reta_size, ETH_RSS_RETA_SIZE_128);
+		return -EINVAL;
+	}
 
-		if (mask != 0) {
-			reta = E1000_READ_REG(hw,E1000_RETA(i >> 2));
-			for (j = 0; j < 4; j++) {
-				if (mask & (0x1 << j))
-					reta_conf->reta[i + j] =
-						(uint8_t)((reta >> 8 * j) & 0xFF);
-			}
+	for (i = 0; i < reta_size; i += IGB_4_BIT_WIDTH) {
+		idx = i / RTE_RETA_GROUP_SIZE;
+		shift = i % RTE_RETA_GROUP_SIZE;
+		mask = (uint8_t)((reta_conf[idx].mask >> shift) &
+						IGB_4_BIT_MASK);
+		if (!mask)
+			continue;
+		reta = E1000_READ_REG(hw, E1000_RETA(i >> 2));
+		for (j = 0; j < IGB_4_BIT_WIDTH; j++) {
+			if (mask & (0x1 << j))
+				reta_conf[idx].reta[shift + j] =
+					((reta >> (CHAR_BIT * j)) &
+						IGB_8_BIT_MASK);
 		}
 	}
 

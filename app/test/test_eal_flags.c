@@ -55,7 +55,7 @@
 #ifdef RTE_LIBRTE_XEN_DOM0
 #define DEFAULT_MEM_SIZE "30"
 #else
-#define DEFAULT_MEM_SIZE "8"
+#define DEFAULT_MEM_SIZE "18"
 #endif
 #define mp_flag "--proc-type=secondary"
 #define no_hpet "--no-hpet"
@@ -400,18 +400,26 @@ test_invalid_b_flag(void)
 static int
 test_invalid_vdev_flag(void)
 {
+#ifdef RTE_EXEC_ENV_BSDAPP
+	/* BSD target doesn't support prefixes at this point, and we also need to
+	 * run another primary process here */
+	const char * prefix = no_shconf;
+#else
+	const char * prefix = "--file-prefix=vdev";
+#endif
+
 	/* Test with invalid vdev option */
-	const char *vdevinval[] = {prgname, "--file-prefix=vdev","-n", "1",
+	const char *vdevinval[] = {prgname, prefix, "-n", "1",
 				"-c", "1", vdev, "eth_dummy"};
 
 	/* Test with valid vdev option */
-	const char *vdevval1[] = {prgname, "--file-prefix=vdev", "-n", "1",
+	const char *vdevval1[] = {prgname, prefix, "-n", "1",
 	"-c", "1", vdev, "eth_ring0"};
 
-	const char *vdevval2[] = {prgname, "--file-prefix=vdev", "-n", "1",
+	const char *vdevval2[] = {prgname, prefix, "-n", "1",
 	"-c", "1", vdev, "eth_ring0,args=test"};
 
-	const char *vdevval3[] = {prgname, "--file-prefix=vdev", "-n", "1",
+	const char *vdevval3[] = {prgname, prefix, "-n", "1",
 	"-c", "1", vdev, "eth_ring0,nodeaction=r1:0:CREATE"};
 
 	if (launch_proc(vdevinval) == 0) {
@@ -484,7 +492,7 @@ test_invalid_r_flag(void)
 }
 
 /*
- * Test that the app doesn't run without the coremask flag. In all cases
+ * Test that the app doesn't run without the coremask/corelist flags. In all cases
  * should give an error and fail to run
  */
 static int
@@ -504,12 +512,22 @@ test_missing_c_flag(void)
 
 	/* -c flag but no coremask value */
 	const char *argv1[] = { prgname, prefix, mp_flag, "-n", "3", "-c"};
-	/* No -c flag at all */
+	/* No -c or -l flag at all */
 	const char *argv2[] = { prgname, prefix, mp_flag, "-n", "3"};
 	/* bad coremask value */
 	const char *argv3[] = { prgname, prefix, mp_flag, "-n", "3", "-c", "error" };
 	/* sanity check of tests - valid coremask value */
 	const char *argv4[] = { prgname, prefix, mp_flag, "-n", "3", "-c", "1" };
+	/* -l flag but no corelist value */
+	const char *argv5[] = { prgname, prefix, mp_flag, "-n", "3", "-l"};
+	const char *argv6[] = { prgname, prefix, mp_flag, "-n", "3", "-l", " " };
+	/* bad corelist values */
+	const char *argv7[] = { prgname, prefix, mp_flag, "-n", "3", "-l", "error" };
+	const char *argv8[] = { prgname, prefix, mp_flag, "-n", "3", "-l", "1-" };
+	const char *argv9[] = { prgname, prefix, mp_flag, "-n", "3", "-l", "1," };
+	const char *argv10[] = { prgname, prefix, mp_flag, "-n", "3", "-l", "1#2" };
+	/* sanity check test - valid corelist value */
+	const char *argv11[] = { prgname, prefix, mp_flag, "-n", "3", "-l", "1-2,3" };
 
 	if (launch_proc(argv1) == 0
 			|| launch_proc(argv2) == 0
@@ -519,6 +537,65 @@ test_missing_c_flag(void)
 	}
 	if (launch_proc(argv4) != 0) {
 		printf("Error - process did not run ok with valid coremask value\n");
+		return -1;
+	}
+
+	if (launch_proc(argv5) == 0
+			|| launch_proc(argv6) == 0
+			|| launch_proc(argv7) == 0
+			|| launch_proc(argv8) == 0
+			|| launch_proc(argv9) == 0
+			|| launch_proc(argv10) == 0) {
+		printf("Error - process ran without error with invalid -l flag\n");
+		return -1;
+	}
+	if (launch_proc(argv11) != 0) {
+		printf("Error - process did not run ok with valid corelist value\n");
+		return -1;
+	}
+	return 0;
+}
+
+/*
+ * Test --master-lcore option with matching coremask
+ */
+static int
+test_master_lcore_flag(void)
+{
+#ifdef RTE_EXEC_ENV_BSDAPP
+	/* BSD target doesn't support prefixes at this point */
+	const char *prefix = "";
+#else
+	char prefix[PATH_MAX], tmp[PATH_MAX];
+	if (get_current_prefix(tmp, sizeof(tmp)) == NULL) {
+		printf("Error - unable to get current prefix!\n");
+		return -1;
+	}
+	snprintf(prefix, sizeof(prefix), "--file-prefix=%s", tmp);
+#endif
+
+	/* --master-lcore flag but no value */
+	const char *argv1[] = { prgname, prefix, mp_flag, "-n", "1", "-c", "3", "--master-lcore"};
+	/* --master-lcore flag with invalid value */
+	const char *argv2[] = { prgname, prefix, mp_flag, "-n", "1", "-c", "3", "--master-lcore", "-1"};
+	const char *argv3[] = { prgname, prefix, mp_flag, "-n", "1", "-c", "3", "--master-lcore", "X"};
+	/* master lcore not in coremask */
+	const char *argv4[] = { prgname, prefix, mp_flag, "-n", "1", "-c", "3", "--master-lcore", "2"};
+	/* valid value */
+	const char *argv5[] = { prgname, prefix, mp_flag, "-n", "1", "-c", "3", "--master-lcore", "1"};
+	/* valid value set before coremask */
+	const char *argv6[] = { prgname, prefix, mp_flag, "-n", "1", "--master-lcore", "1", "-c", "3"};
+
+	if (launch_proc(argv1) == 0
+			|| launch_proc(argv2) == 0
+			|| launch_proc(argv3) == 0
+			|| launch_proc(argv4) == 0) {
+		printf("Error - process ran without error with wrong --master-lcore\n");
+		return -1;
+	}
+	if (launch_proc(argv5) != 0
+			|| launch_proc(argv6) != 0) {
+		printf("Error - process did not run ok with valid --master-lcore\n");
 		return -1;
 	}
 	return 0;
@@ -1210,6 +1287,12 @@ test_eal_flags(void)
 	ret = test_missing_c_flag();
 	if (ret < 0) {
 		printf("Error in test_missing_c_flag()\n");
+		return ret;
+	}
+
+	ret = test_master_lcore_flag();
+	if (ret < 0) {
+		printf("Error in test_master_lcore_flag()\n");
 		return ret;
 	}
 

@@ -33,6 +33,177 @@ Resolved Issues
 
 This section describes previously known issues that have been resolved since release version 1.2.
 
+Running TestPMD with SRIOV in Domain U may cause it to hang when XENVIRT switch is on
+-------------------------------------------------------------------------------------
+
++--------------------------------+--------------------------------------------------------------------------------------+
+| Title                          | Running TestPMD with SRIOV in Domain U may cause it to hang when XENVIRT switch is on|
+|                                |                                                                                      |
++================================+======================================================================================+
+| Reference #                    | IXA00168949                                                                          |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Description                    | When TestPMD is run with only SRIOV port /testpmd -c f -n 4 -- -i, the following     |
+|                                | error occurs:                                                                        |
+|                                |                                                                                      |
+|                                | PMD: gntalloc: ioctl error                                                           |
+|                                |                                                                                      |
+|                                | EAL: Error - exiting with code: 1                                                    |
+|                                |                                                                                      |
+|                                | Cause: Creation of mbuf pool for socket 0 failed                                     |
+|                                |                                                                                      |
+|                                | Then, alternately run SRIOV port and virtIO with testpmd:                            |
+|                                |                                                                                      |
+|                                | testpmd -c f -n 4 -- -i                                                              |
+|                                |                                                                                      |
+|                                | testpmd -c f -n 4 --use-dev="eth_xenvirt0" -- -i                                     |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Implication                    | DomU will not be accessible after you repeat this action some times                  |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Resolution/ Workaround         | Run testpmd with a "--total-num-mbufs=N(N<=3500)"                                    |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Affected Environment/ Platform | Fedora 16, 64 bits + Xen hypervisor 4.2.3 + Domain 0 kernel 3.10.0                   |
+|                                | +Domain U kernel 3.6.11                                                              |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Driver/Module                  | TestPMD Sample Application                                                           |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+
+Vhost-xen cannot detect Domain U application exit on Xen version 4.0.1
+----------------------------------------------------------------------
+
++--------------------------------+--------------------------------------------------------------------------------------+
+| Title                          | Vhost-xen cannot detect Domain U application exit on Xen 4.0.1.                      |
+|                                |                                                                                      |
++================================+======================================================================================+
+| Reference #                    | IXA00168947                                                                          |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Description                    | When using DPDK applications on Xen 4.0.1, e.g. TestPMD Sample Application,          |
+|                                | on killing the application (e.g. killall testmd) vhost-switch cannot detect          |
+|                                | the domain U exited and does not free the Virtio device.                             |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Implication                    | Virtio device not freed after application is killed when using vhost-switch on Xen   |
+|                                |                                                                           4.0.1      |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Resolution                     | Resolved in DPDK 1.8                                                                 |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Affected Environment/ Platform | Xen 4.0.1                                                                            |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Driver/Module                  | Vhost-switch                                                                         |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+
+Virtio incorrect header length used if MSI-X is disabled by kernel driver
+-------------------------------------------------------------------------
+
++--------------------------------+--------------------------------------------------------------------------------------+
+| Title                          | Virtio incorrect header length used if MSI-X is disabled by kernel driver or         |
+|                                | if VIRTIO_NET_F_MAC is not negotiated.                                               |
+|                                |                                                                                      |
++================================+======================================================================================+
+| Reference #                    | IXA00384256                                                                          |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Description                    | The Virtio header for host-guest communication is of variable length and             |
+|                                | is dependent on whether MSI-X has been enabled by the kernel driver for the network  |
+|                                | device.                                                                              |
+|                                |                                                                                      |
+|                                | The base header length of 20 bytes will be extended by 4 bytes to accommodate MSI-X  |
+|                                | vectors and the Virtio Network Device header will appear at byte offset 24.          |
+|                                |                                                                                      |
+|                                | The Userspace Virtio Poll Mode Driver tests the guest feature bits for the presence  |
+|                                | of VIRTIO_PCI_FLAG_MISIX, however this bit field is not part of the Virtio           |
+|                                | specification and resolves to the VIRTIO_NET_F_MAC feature instead.                  |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Implication                    | The DPDK kernel driver will enable MSI-X by default,                                 |
+|                                | however if loaded with "intr_mode=legacy" on a guest with a Virtio Network Device,   |
+|                                | a KVM-Qemu guest may crash with the following error: "virtio-net header not in first |
+|                                | element".                                                                            |
+|                                |                                                                                      |
+|                                | If VIRTIO_NET_F_MAC feature has not been negotiated, then the Userspace Poll Mode    |
+|                                | Driver will assume that MSI-X has been disabled and will prevent the proper          |
+|                                | functioning of the driver.                                                           |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Resolution                     | Ensure #define VIRTIO_PCI_CONFIG(hw) returns the correct offset (20 or 24 bytes) for |
+|                                | the devices where in rare cases MSI-X is disabled or VIRTIO_NET_F_MAC has not been   |
+|                                | negotiated.                                                                          |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Affected Environment/ Platform | Virtio devices where  MSI-X is disabled or VIRTIO_NET_F_MAC feature has not been     |
+|                                | negotiated.                                                                          |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Driver/Module                  | librte_pmd_virtio                                                                    |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+
+Unstable system performance across application executions with 2MB pages
+------------------------------------------------------------------------
+
++--------------------------------+--------------------------------------------------------------------------------------+
+| Title                          | Unstable system performance across application executions with 2MB pages             |
+|                                |                                                                                      |
++================================+======================================================================================+
+| Reference #                    | IXA00372346                                                                          |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Description                    | The performance of an DPDK application may vary across executions of an              |
+|                                | application due to a varying number of TLB misses depending on the location of       |
+|                                | accessed structures in memory.                                                       |
+|                                | This situation occurs on rare occasions.                                             |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Implication                    | Occasionally, relatively poor performance of DPDK applications is encountered.       |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Resolution/ Workaround         | Using 1 GB pages results in lower usage of TLB entries, resolving this issue.        |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Affected Environment/ Platform | Systems using 2 MB pages                                                             |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Driver/Module                  | All                                                                                  |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+
+Link status change not working with MSI interrupts
+--------------------------------------------------
+
++--------------------------------+--------------------------------------------------------------------------------------+
+| Title                          | Link status change not working with MSI interrupts                                   |
+|                                |                                                                                      |
++================================+======================================================================================+
+| Reference #                    | IXA00378191                                                                          |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Description                    | MSI interrupts are not supported by the PMD.                                         |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Implication                    | Link status change will only work with legacy or MSI-X interrupts.                   |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Resolution/ Workaround         | The igb_uio driver can now be loaded with either legacy or MSI-X interrupt support.  |
+|                                | However, this configuration is not tested.                                           |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Affected Environment/ Platform | All                                                                                  |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+| Driver/Module                  | Poll Mode Driver (PMD)                                                               |
+|                                |                                                                                      |
++--------------------------------+--------------------------------------------------------------------------------------+
+
 KNI does not provide Ethtool support for all NICs supported by the Poll-Mode Drivers
 ------------------------------------------------------------------------------------
 
@@ -200,7 +371,7 @@ Device initialization failure with Intel® Ethernet Server Adapter X520-T2
 | Reference #                     | 55                                                                                    |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Description                     | If this device is bound to the Linux kernel IXGBE driver when the Intel® DPDK is      |
+| Description                     | If this device is bound to the Linux kernel IXGBE driver when the DPDK is             |
 |                                 | initialized, DPDK is initialized, the device initialization fails with error code -17 |
 |                                 | “IXGBE_ERR_PHY_ADDR_INVALID”.                                                         |
 |                                 |                                                                                       |
@@ -208,7 +379,7 @@ Device initialization failure with Intel® Ethernet Server Adapter X520-T2
 | Implication                     | The device is not initialized and cannot be used by an application.                   |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Resolution/Workaround           | Introduced a small delay in device initialization to allow Intel® DPDK to always find |
+| Resolution/Workaround           | Introduced a small delay in device initialization to allow DPDK to always find        |
 |                                 | the device.                                                                           |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
@@ -219,11 +390,11 @@ Device initialization failure with Intel® Ethernet Server Adapter X520-T2
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 
-Intel® DPDK kernel module is incompatible with Linux kernel version 3.3
------------------------------------------------------------------------
+DPDK kernel module is incompatible with Linux kernel version 3.3
+----------------------------------------------------------------
 
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Title                           | Intel® DPDK kernel module is incompatible with Linux kernel version 3.3               |
+| Title                           | DPDK kernel module is incompatible with Linux kernel version 3.3                      |
 |                                 |                                                                                       |
 +=================================+=======================================================================================+
 | Reference #                     | IXA00373232                                                                           |
@@ -430,7 +601,7 @@ Port not found issue with Intel® 82580 Gigabit Ethernet Controller
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Description                     | After going through multiple driver unbind/bind cycles, an Intel® 82580               |
 |                                 | Ethernet Controller port may no longer be found and initialized by the                |
-|                                 | Intel® DPDK.                                                                          |
+|                                 | DPDK.                                                                                 |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Implication                     | The port will be unusable.                                                            |
@@ -506,8 +677,8 @@ Promiscuous mode for 82580 NICs can only be enabled after a call to rte_eth_dev_
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 
-Incorrect CPU socket information reported in /proc/cpuinfo can prevent the Intel® DPDK from running
----------------------------------------------------------------------------------------------------
+Incorrect CPU socket information reported in /proc/cpuinfo can prevent the DPDK from running
+--------------------------------------------------------------------------------------------
 
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Title                           | Incorrect CPU socket information reported in /proc/cpuinfo can prevent the Intel®     |
@@ -517,14 +688,14 @@ Incorrect CPU socket information reported in /proc/cpuinfo can prevent the Intel
 | Reference #                     | 63                                                                                    |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Description                     | The Intel® DPDK users information supplied by the Linux  kernel to determine the      |
+| Description                     | The DPDK users information supplied by the Linux  kernel to determine the             |
 |                                 | hardware properties of the system being used. On rare occasions, information supplied |
 |                                 | by /proc/cpuinfo does not match that reported elsewhere. In some cases, it has been   |
 |                                 | observed that the CPU socket numbering given in /proc/cpuinfo is incorrect and this   |
-|                                 | can prevent Intel® DPDK from operating.                                               |
+|                                 | can prevent DPDK from operating.                                                      |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Implication                     | The Intel® DPDK cannot run on systems where /proc/cpuinfo does not report the correct |
+| Implication                     | The DPDK cannot run on systems where /proc/cpuinfo does not report the correct        |
 |                                 | CPU socket topology.                                                                  |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
@@ -578,7 +749,7 @@ L3FWD-VF might lose CRC bytes
 | Description                     | Currently, the CRC stripping configuration does not affect the VF driver.             |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Implication                     | Packets transmitted by the Intel® DPDK in the VM may be lacking 4 bytes (packet CRC). |
+| Implication                     | Packets transmitted by the DPDK in the VM may be lacking 4 bytes (packet CRC).        |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Resolution/ Workaround          | Set “strip_crc” to 1 in the sample applications that use the VF PMD.                  |
@@ -591,8 +762,8 @@ L3FWD-VF might lose CRC bytes
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 
-32-bit Intel® DPDK sample applications fails when using more than one 1 GB hugepage
------------------------------------------------------------------------------------
+32-bit DPDK sample applications fails when using more than one 1 GB hugepage
+----------------------------------------------------------------------------
 
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Title                           | 32-bit Intel®  DPDK sample applications fails when using more than one 1 GB hugepage  |
@@ -646,11 +817,11 @@ l2fwd fails to launch if the NIC is the Intel® 82571EB Gigabit Ethernet Control
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 
-32-bit Intel® DPDK applications may fail to initialize on 64-bit OS
--------------------------------------------------------------------
+32-bit DPDK applications may fail to initialize on 64-bit OS
+------------------------------------------------------------
 
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Title                           | 32-bit Intel® DPDK applications may fail to initialize on 64-bit OS                   |
+| Title                           | 32-bit DPDK applications may fail to initialize on 64-bit OS                          |
 |                                 |                                                                                       |
 +=================================+=======================================================================================+
 | Reference #                     | IXA00378513                                                                           |
@@ -739,12 +910,12 @@ Config file change can cause build to fail
 | Reference #                     | IXA00369247                                                                           |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Description                     | If a change in a config file results in some Intel® DPDK files that were needed no    |
+| Description                     | If a change in a config file results in some DPDK files that were needed no           |
 |                                 | longer being needed, the build will fail. This is because the \*.o file will still    |
 |                                 | exist, and the linker will try to link it.                                            |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Implication                     | Intel® DPDK compilation failure                                                       |
+| Implication                     | DPDK compilation failure                                                              |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Resolution                      | The Makefile now provides instructions to clean out old kernel module object files.   |
@@ -768,8 +939,8 @@ rte_cmdline library should not be used in production code due to limited testing
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Description                     | The rte_cmdline library provides a command line interface for use in sample           |
-|                                 | applications and test applications distributed as part of Intel® DPDK. However, it is |
-|                                 | not validated to the same standard as other Intel® DPDK libraries.                    |
+|                                 | applications and test applications distributed as part of DPDK. However, it is        |
+|                                 | not validated to the same standard as other DPDK libraries.                           |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Implication                     | It may contain bugs or errors that could cause issues in production applications.     |
@@ -1017,18 +1188,18 @@ EAL can silently reserve less memory than requested
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 
-SSH connectivity with the board may be lost when starting an Intel® DPDK application
-------------------------------------------------------------------------------------
+SSH connectivity with the board may be lost when starting a DPDK application
+----------------------------------------------------------------------------
 
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Title                           | SSH connectivity with the board may be lost when starting an Intel® DPDK application  |
+| Title                           | SSH connectivity with the board may be lost when starting a DPDK application          |
 |                                 |                                                                                       |
 +=================================+=======================================================================================+
 | Reference #                     | 26                                                                                    |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Description                     | Currently, the Intel®  DPDK takes over all the NICs found on the board that are       |
-|                                 | supported by the Intel® DPDK. This results in these NICs being removed from the NIC   |
+|                                 | supported by the DPDK. This results in these NICs being removed from the NIC          |
 |                                 | set handled by the kernel,which has the side effect of any SSH connection being       |
 |                                 | terminated. See also issue #27.                                                       |
 |                                 |                                                                                       |
@@ -1036,8 +1207,8 @@ SSH connectivity with the board may be lost when starting an Intel® DPDK applic
 | Implication                     | Loss of network connectivity to board.                                                |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Resolution                      | Intel® DPDK now no longer binds ports on startup. Please refer to the Getting Started |
-|                                 | Guide for information on how to bind/unbind ports from Intel® DPDK.                   |
+| Resolution                      | DPDK now no longer binds ports on startup. Please refer to the Getting Started        |
+|                                 | Guide for information on how to bind/unbind ports from DPDK.                          |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Affected Environment/Platform   | Systems using a Intel®DPDK supported NIC for remote system access                     |
@@ -1065,12 +1236,12 @@ Remote network connections lost when running autotests or sample applications
 | Implication                     | Loss of network connectivity to board when connected remotely.                        |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Resolution                      | Intel® DPDK now no longer binds ports on startup.                                     |
+| Resolution                      | DPDK now no longer binds ports on startup.                                            |
 |                                 | Please refer to the Getting Started Guide for information on how to bind/unbind ports |
-|                                 | from Intel® DPDK.                                                                     |
+|                                 | from DPDK.                                                                            |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Affected Environment/Platform   | Systems using a Intel® DPDK supported NIC for remote system access                    |
+| Affected Environment/Platform   | Systems using a DPDK supported NIC for remote system access                           |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Driver/Module                   | Sample applications                                                                   |
@@ -1089,10 +1260,10 @@ KNI may not work properly in a multi-process environment
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Description                     | Some of the network interface operations such as, MTU change or link UP/DOWN, when    |
 |                                 | executed on KNI interface, might fail in a multi-process environment, although they   |
-|                                 | are normally successful in the Intel® DPDK single process environment.                |
+|                                 | are normally successful in the DPDK single process environment.                       |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Implication                     | Some network interface operations on KNI cannot be used in an Intel® DPDK             |
+| Implication                     | Some network interface operations on KNI cannot be used in a DPDK                     |
 |                                 | multi-process environment.                                                            |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
@@ -1119,14 +1290,14 @@ Hash library cannot be used in multi-process applications with multiple binaries
 | Description                     | The hash function used by a given hash-table implementation is referenced in the code |
 |                                 | by way of a function pointer. This means that it cannot work in cases where the hash  |
 |                                 | function is at a different location in the code segment in different processes, as is |
-|                                 | the case where an Intel® DPDK multi-process application uses a number of different    |
+|                                 | the case where a DPDK multi-process application uses a number of different            |
 |                                 | binaries, for example, the client-server multi-process example.                       |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Implication                     | The Hash library will not work if shared by multiple processes.                       |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Resolution/Workaround           | New API was added for multiprocess scenario. Please refer to Intel® DPDK Programmer’s |
+| Resolution/Workaround           | New API was added for multiprocess scenario. Please refer to DPDK Programmer’s        |
 |                                 | Guide for more information.                                                           |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
@@ -1182,8 +1353,38 @@ Packet reception issues when virtualization is enabled
 | Implication                     | An application requiring packet transmission or reception will not function.          |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
-| Resolution/Workaround           | Intel® DPDK Poll Mode Driver now has the ability to map correct physical addresses to |
+| Resolution/Workaround           | DPDK Poll Mode Driver now has the ability to map correct physical addresses to        |
 |                                 | the device structures.                                                                |
+|                                 |                                                                                       |
++---------------------------------+---------------------------------------------------------------------------------------+
+| Affected Environment/Platform   | All                                                                                   |
+|                                 |                                                                                       |
++---------------------------------+---------------------------------------------------------------------------------------+
+| Driver/Module                   | Poll mode drivers                                                                     |
+|                                 |                                                                                       |
++---------------------------------+---------------------------------------------------------------------------------------+
+
+
+
+Double VLAN does not work on Intel® 40GbE ethernet contoller
+------------------------------------------------------------
+
++---------------------------------+---------------------------------------------------------------------------------------+
+| Title                           | Double VLAN does not work on Intel® 40GbE ethernet controller                         |
+|                                 |                                                                                       |
++=================================+=======================================================================================+
+| Reference #                     | IXA00369908                                                                           |
+|                                 |                                                                                       |
++---------------------------------+---------------------------------------------------------------------------------------+
+| Description                     | On Intel® 40 GbE ethernet controller double VLAN does not work.                       |
+|                                 | This was confirmed as a Firmware issue which will be fixed in later versions of       |
+|                                 | firmware.                                                                             |
++---------------------------------+---------------------------------------------------------------------------------------+
+| Implication                     | After setting double vlan to be enabled on a port, no packets can be transmitted out  |
+|                                 | on that port.                                                                         |
++---------------------------------+---------------------------------------------------------------------------------------+
+| Resolution/Workaround           | Resolved in latest release with firmware upgrade.                                     |
+|                                 |                                                                                       |
 |                                 |                                                                                       |
 +---------------------------------+---------------------------------------------------------------------------------------+
 | Affected Environment/Platform   | All                                                                                   |

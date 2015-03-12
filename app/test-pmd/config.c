@@ -32,7 +32,7 @@
  */
 /*   BSD LICENSE
  *
- *   Copyright(c) 2013 6WIND.
+ *   Copyright 2013-2014 6WIND S.A.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -95,6 +95,20 @@
 #include <rte_string_fns.h>
 
 #include "testpmd.h"
+
+static const char *flowtype_str[RTE_ETH_FLOW_TYPE_MAX] = {
+	NULL,
+	"udp4",
+	"tcp4",
+	"sctp4",
+	"ip4",
+	"ip4-frag",
+	"udp6",
+	"tcp6",
+	"sctp6",
+	"ip6",
+	"ip6-frag",
+};
 
 static void
 print_ethaddr(const char *name, struct ether_addr *eth_addr)
@@ -284,6 +298,7 @@ port_infos_display(portid_t port_id)
 	struct rte_port *port;
 	struct ether_addr mac_addr;
 	struct rte_eth_link link;
+	struct rte_eth_dev_info dev_info;
 	int vlan_offload;
 	struct rte_mempool * mp;
 	static const char *info_border = "*********************";
@@ -339,6 +354,11 @@ port_infos_display(portid_t port_id)
 		else
 			printf("  qinq(extend) off \n");
 	}
+
+	memset(&dev_info, 0, sizeof(dev_info));
+	rte_eth_dev_info_get(port_id, &dev_info);
+	if (dev_info.reta_size > 0)
+		printf("Redirection table size: %u\n", dev_info.reta_size);
 }
 
 int
@@ -608,8 +628,13 @@ ring_dma_zone_lookup(const char *ring_name, uint8_t port_id, uint16_t q_id)
 union igb_ring_dword {
 	uint64_t dword;
 	struct {
+#if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
+		uint32_t lo;
+		uint32_t hi;
+#else
 		uint32_t hi;
 		uint32_t lo;
+#endif
 	} words;
 };
 
@@ -652,23 +677,29 @@ ring_rx_descriptor_display(const struct rte_memzone *ring_mz,
 		/* 32 bytes RX descriptor, i40e only */
 		struct igb_ring_desc_32_bytes *ring =
 			(struct igb_ring_desc_32_bytes *)ring_mz->addr;
+		ring[desc_id].lo_dword.dword =
+			rte_le_to_cpu_64(ring[desc_id].lo_dword.dword);
+		ring_rxd_display_dword(ring[desc_id].lo_dword);
+		ring[desc_id].hi_dword.dword =
+			rte_le_to_cpu_64(ring[desc_id].hi_dword.dword);
+		ring_rxd_display_dword(ring[desc_id].hi_dword);
+		ring[desc_id].resv1.dword =
+			rte_le_to_cpu_64(ring[desc_id].resv1.dword);
+		ring_rxd_display_dword(ring[desc_id].resv1);
+		ring[desc_id].resv2.dword =
+			rte_le_to_cpu_64(ring[desc_id].resv2.dword);
+		ring_rxd_display_dword(ring[desc_id].resv2);
 
-		ring_rxd_display_dword(rte_le_to_cpu_64(
-				ring[desc_id].lo_dword));
-		ring_rxd_display_dword(rte_le_to_cpu_64(
-				ring[desc_id].hi_dword));
-		ring_rxd_display_dword(rte_le_to_cpu_64(
-				ring[desc_id].resv1));
-		ring_rxd_display_dword(rte_le_to_cpu_64(
-				ring[desc_id].resv2));
 		return;
 	}
 #endif
 	/* 16 bytes RX descriptor */
-	ring_rxd_display_dword(rte_le_to_cpu_64(
-			ring[desc_id].lo_dword));
-	ring_rxd_display_dword(rte_le_to_cpu_64(
-			ring[desc_id].hi_dword));
+	ring[desc_id].lo_dword.dword =
+		rte_le_to_cpu_64(ring[desc_id].lo_dword.dword);
+	ring_rxd_display_dword(ring[desc_id].lo_dword);
+	ring[desc_id].hi_dword.dword =
+		rte_le_to_cpu_64(ring[desc_id].hi_dword.dword);
+	ring_rxd_display_dword(ring[desc_id].hi_dword);
 }
 
 static void
@@ -678,8 +709,8 @@ ring_tx_descriptor_display(const struct rte_memzone *ring_mz, uint16_t desc_id)
 	struct igb_ring_desc_16_bytes txd;
 
 	ring = (struct igb_ring_desc_16_bytes *)ring_mz->addr;
-	txd.lo_dword = rte_le_to_cpu_64(ring[desc_id].lo_dword);
-	txd.hi_dword = rte_le_to_cpu_64(ring[desc_id].hi_dword);
+	txd.lo_dword.dword = rte_le_to_cpu_64(ring[desc_id].lo_dword.dword);
+	txd.hi_dword.dword = rte_le_to_cpu_64(ring[desc_id].hi_dword.dword);
 	printf("    0x%08X - 0x%08X / 0x%08X - 0x%08X\n",
 			(unsigned)txd.lo_dword.words.lo,
 			(unsigned)txd.lo_dword.words.hi,
@@ -758,36 +789,29 @@ rxtx_config_display(void)
 }
 
 void
-port_rss_reta_info(portid_t port_id,struct rte_eth_rss_reta *reta_conf)
+port_rss_reta_info(portid_t port_id,
+		   struct rte_eth_rss_reta_entry64 *reta_conf,
+		   uint16_t nb_entries)
 {
-	uint8_t i,j;
+	uint16_t i, idx, shift;
 	int ret;
 
 	if (port_id_is_invalid(port_id))
 		return;
 
-	ret = rte_eth_dev_rss_reta_query(port_id, reta_conf);
+	ret = rte_eth_dev_rss_reta_query(port_id, reta_conf, nb_entries);
 	if (ret != 0) {
 		printf("Failed to get RSS RETA info, return code = %d\n", ret);
 		return;
 	}
 
-	if (reta_conf->mask_lo != 0) {
-		for (i = 0; i< ETH_RSS_RETA_NUM_ENTRIES/2; i++) {
-			if (reta_conf->mask_lo & (uint64_t)(1ULL << i))
-				printf("RSS RETA configuration: hash index=%d,"
-					"queue=%d\n",i,reta_conf->reta[i]);
-		}
-	}
-
-	if (reta_conf->mask_hi != 0) {
-		for (i = 0; i< ETH_RSS_RETA_NUM_ENTRIES/2; i++) {
-			if(reta_conf->mask_hi & (uint64_t)(1ULL << i)) {
-				j = (uint8_t)(i + ETH_RSS_RETA_NUM_ENTRIES/2);
-				printf("RSS RETA configuration: hash index=%d,"
-					"queue=%d\n",j,reta_conf->reta[j]);
-			}
-		}
+	for (i = 0; i < nb_entries; i++) {
+		idx = i / RTE_RETA_GROUP_SIZE;
+		shift = i % RTE_RETA_GROUP_SIZE;
+		if (!(reta_conf[idx].mask & (1ULL << shift)))
+			continue;
+		printf("RSS RETA configuration: hash index=%u, queue=%u\n",
+					i, reta_conf[idx].reta[shift]);
 	}
 }
 
@@ -800,7 +824,7 @@ port_rss_hash_conf_show(portid_t port_id, int show_rss_key)
 {
 	struct rte_eth_rss_conf rss_conf;
 	uint8_t rss_key[10 * 4];
-	uint16_t rss_hf;
+	uint64_t rss_hf;
 	uint8_t i;
 	int diag;
 
@@ -1416,7 +1440,7 @@ set_fwd_ports_mask(uint64_t portmask)
 		return;
 	}
 	nb_pt = 0;
-	for (i = 0; i < 64; i++) {
+	for (i = 0; i < (unsigned)RTE_MIN(64, RTE_MAX_ETHPORTS); i++) {
 		if (! ((uint64_t)(1ULL << i) & portmask))
 			continue;
 		portlist[nb_pt++] = i;
@@ -1670,7 +1694,7 @@ tx_vlan_set(portid_t port_id, uint16_t vlan_id)
 		return;
 	if (vlan_id_is_invalid(vlan_id))
 		return;
-	ports[port_id].tx_ol_flags |= PKT_TX_VLAN_PKT;
+	ports[port_id].tx_ol_flags |= TESTPMD_TX_OFFLOAD_INSERT_VLAN;
 	ports[port_id].tx_vlan_id = vlan_id;
 }
 
@@ -1679,7 +1703,7 @@ tx_vlan_reset(portid_t port_id)
 {
 	if (port_id_is_invalid(port_id))
 		return;
-	ports[port_id].tx_ol_flags &= ~PKT_TX_VLAN_PKT;
+	ports[port_id].tx_ol_flags &= ~TESTPMD_TX_OFFLOAD_INSERT_VLAN;
 }
 
 void
@@ -1744,17 +1768,6 @@ set_qmap(portid_t port_id, uint8_t is_rx, uint16_t queue_id, uint8_t map_value)
 }
 
 void
-tx_cksum_set(portid_t port_id, uint64_t ol_flags)
-{
-	uint64_t tx_ol_flags;
-	if (port_id_is_invalid(port_id))
-		return;
-	/* Clear last 8 bits and then set L3/4 checksum mask again */
-	tx_ol_flags = ports[port_id].tx_ol_flags & (~0x0FFull);
-	ports[port_id].tx_ol_flags = ((ol_flags & 0xff) | tx_ol_flags);
-}
-
-void
 fdir_add_signature_filter(portid_t port_id, uint8_t queue_id,
 			  struct rte_fdir_filter *fdir_filter)
 {
@@ -1808,29 +1821,130 @@ fdir_remove_signature_filter(portid_t port_id,
 
 }
 
+static inline void
+print_fdir_flex_payload(struct rte_eth_fdir_flex_conf *flex_conf)
+{
+	struct rte_eth_flex_payload_cfg *cfg;
+	int i, j;
+
+	for (i = 0; i < flex_conf->nb_payloads; i++) {
+		cfg = &flex_conf->flex_set[i];
+		if (cfg->type == RTE_ETH_L2_PAYLOAD)
+			printf("\n    L2_PAYLOAD:  ");
+		else if (cfg->type == RTE_ETH_L3_PAYLOAD)
+			printf("\n    L3_PAYLOAD:  ");
+		else if (cfg->type == RTE_ETH_L4_PAYLOAD)
+			printf("\n    L4_PAYLOAD:  ");
+		else
+			printf("\n    UNKNOWN PAYLOAD(%u):  ", cfg->type);
+		for (j = 0; j < RTE_ETH_FDIR_MAX_FLEXLEN; j++)
+			printf("  %-5u", cfg->src_offset[j]);
+	}
+	printf("\n");
+}
+
+static inline void
+print_fdir_flex_mask(struct rte_eth_fdir_flex_conf *flex_conf)
+{
+	struct rte_eth_fdir_flex_mask *mask;
+	int i, j;
+
+	for (i = 0; i < flex_conf->nb_flexmasks; i++) {
+		mask = &flex_conf->flex_mask[i];
+		printf("\n    %s:\t", flowtype_str[mask->flow_type]);
+		for (j = 0; j < RTE_ETH_FDIR_MAX_FLEXLEN; j++)
+			printf(" %02x", mask->mask[j]);
+	}
+	printf("\n");
+}
+
+static inline void
+print_fdir_flow_type(uint32_t flow_types_mask)
+{
+	int i = 0;
+
+	for (i = RTE_ETH_FLOW_TYPE_UDPV4;
+	     i <= RTE_ETH_FLOW_TYPE_FRAG_IPV6;
+	     i++) {
+		if (flow_types_mask & (1 << i))
+			printf(" %s", flowtype_str[i]);
+	}
+	printf("\n");
+}
+
 void
 fdir_get_infos(portid_t port_id)
 {
-	struct rte_eth_fdir fdir_infos;
+	struct rte_eth_fdir_stats fdir_stat;
+	struct rte_eth_fdir_info fdir_info;
+	int ret;
 
 	static const char *fdir_stats_border = "########################";
 
 	if (port_id_is_invalid(port_id))
 		return;
+	ret = rte_eth_dev_filter_supported(port_id, RTE_ETH_FILTER_FDIR);
+	if (ret < 0) {
+		/* use the old fdir APIs to get info */
+		struct rte_eth_fdir fdir;
+		memset(&fdir, 0, sizeof(fdir));
+		ret = rte_eth_dev_fdir_get_infos(port_id, &fdir);
+		if (ret < 0) {
+			printf("\n getting fdir info fails on port %-2d\n",
+				port_id);
+			return;
+		}
+		printf("\n  %s FDIR infos for port %-2d     %s\n",
+			fdir_stats_border, port_id, fdir_stats_border);
+		printf("  collision: %-10"PRIu64"  free:     %"PRIu64"\n"
+		       "  maxhash:   %-10"PRIu64"  maxlen:   %"PRIu64"\n"
+		       "  add:	     %-10"PRIu64"  remove:   %"PRIu64"\n"
+		       "  f_add:     %-10"PRIu64"  f_remove: %"PRIu64"\n",
+		       (uint64_t)(fdir.collision), (uint64_t)(fdir.free),
+		       (uint64_t)(fdir.maxhash), (uint64_t)(fdir.maxlen),
+		       fdir.add, fdir.remove, fdir.f_add, fdir.f_remove);
+		printf("  %s############################%s\n",
+		       fdir_stats_border, fdir_stats_border);
+		return;
+	}
 
-	rte_eth_dev_fdir_get_infos(port_id, &fdir_infos);
-
+	memset(&fdir_info, 0, sizeof(fdir_info));
+	rte_eth_dev_filter_ctrl(port_id, RTE_ETH_FILTER_FDIR,
+			       RTE_ETH_FILTER_INFO, &fdir_info);
+	memset(&fdir_stat, 0, sizeof(fdir_stat));
+	rte_eth_dev_filter_ctrl(port_id, RTE_ETH_FILTER_FDIR,
+			       RTE_ETH_FILTER_STATS, &fdir_stat);
 	printf("\n  %s FDIR infos for port %-2d     %s\n",
 	       fdir_stats_border, port_id, fdir_stats_border);
-
-	printf("  collision: %-10"PRIu64"  free:     %"PRIu64"\n"
-	       "  maxhash:   %-10"PRIu64"  maxlen:   %"PRIu64"\n"
-	       "  add:       %-10"PRIu64"  remove:   %"PRIu64"\n"
-	       "  f_add:     %-10"PRIu64"  f_remove: %"PRIu64"\n",
-	       (uint64_t)(fdir_infos.collision), (uint64_t)(fdir_infos.free),
-	       (uint64_t)(fdir_infos.maxhash), (uint64_t)(fdir_infos.maxlen),
-	       fdir_infos.add, fdir_infos.remove,
-	       fdir_infos.f_add, fdir_infos.f_remove);
+	printf("  MODE: ");
+	if (fdir_info.mode == RTE_FDIR_MODE_PERFECT)
+			printf("  PERFECT\n");
+	else if (fdir_info.mode == RTE_FDIR_MODE_SIGNATURE)
+			printf("  SIGNATURE\n");
+	else
+			printf("  DISABLE\n");
+	printf("  SUPPORTED FLOW TYPE: ");
+	print_fdir_flow_type(fdir_info.flow_types_mask[0]);
+	printf("  FLEX PAYLOAD INFO:\n");
+	printf("  max_len:       %-10"PRIu32"  payload_limit: %-10"PRIu32"\n"
+	       "  payload_unit:  %-10"PRIu32"  payload_seg:   %-10"PRIu32"\n"
+	       "  bitmask_unit:  %-10"PRIu32"  bitmask_num:   %-10"PRIu32"\n",
+		fdir_info.max_flexpayload, fdir_info.flex_payload_limit,
+		fdir_info.flex_payload_unit,
+		fdir_info.max_flex_payload_segment_num,
+		fdir_info.flex_bitmask_unit, fdir_info.max_flex_bitmask_num);
+	if (fdir_info.flex_conf.nb_payloads > 0) {
+		printf("  FLEX PAYLOAD SRC OFFSET:");
+		print_fdir_flex_payload(&fdir_info.flex_conf);
+	}
+	if (fdir_info.flex_conf.nb_flexmasks > 0) {
+		printf("  FLEX MASK CFG:");
+		print_fdir_flex_mask(&fdir_info.flex_conf);
+	}
+	printf("  guarant_count: %-10"PRIu32"  best_count:    %-10"PRIu32"\n",
+	       fdir_stat.guarant_cnt, fdir_stat.best_cnt);
+	printf("  guarant_space: %-10"PRIu32"  best_space:    %-10"PRIu32"\n",
+	       fdir_info.guarant_spc, fdir_info.guarant_spc);
 	printf("  %s############################%s\n",
 	       fdir_stats_border, fdir_stats_border);
 }
@@ -1903,6 +2017,67 @@ fdir_set_masks(portid_t port_id, struct rte_fdir_masks *fdir_masks)
 
 	printf("rte_eth_dev_set_masks_filter for port_id=%d failed "
 	       "diag=%d\n", port_id, diag);
+}
+
+void
+fdir_set_flex_mask(portid_t port_id, struct rte_eth_fdir_flex_mask *cfg)
+{
+	struct rte_port *port;
+	struct rte_eth_fdir_flex_conf *flex_conf;
+	int i, idx = 0;
+
+	port = &ports[port_id];
+	flex_conf = &port->dev_conf.fdir_conf.flex_conf;
+	for (i = 0; i < RTE_ETH_FLOW_TYPE_MAX; i++) {
+		if (cfg->flow_type == flex_conf->flex_mask[i].flow_type) {
+			idx = i;
+			break;
+		}
+	}
+	if (i >= RTE_ETH_FLOW_TYPE_MAX) {
+		if (flex_conf->nb_flexmasks < RTE_DIM(flex_conf->flex_mask)) {
+			idx = flex_conf->nb_flexmasks;
+			flex_conf->nb_flexmasks++;
+		} else {
+			printf("The flex mask table is full. Can not set flex"
+				" mask for flow_type(%u).", cfg->flow_type);
+			return;
+		}
+	}
+	(void)rte_memcpy(&flex_conf->flex_mask[idx],
+			 cfg,
+			 sizeof(struct rte_eth_fdir_flex_mask));
+}
+
+void
+fdir_set_flex_payload(portid_t port_id, struct rte_eth_flex_payload_cfg *cfg)
+{
+	struct rte_port *port;
+	struct rte_eth_fdir_flex_conf *flex_conf;
+	int i, idx = 0;
+
+	port = &ports[port_id];
+	flex_conf = &port->dev_conf.fdir_conf.flex_conf;
+	for (i = 0; i < RTE_ETH_PAYLOAD_MAX; i++) {
+		if (cfg->type == flex_conf->flex_set[i].type) {
+			idx = i;
+			break;
+		}
+	}
+	if (i >= RTE_ETH_PAYLOAD_MAX) {
+		if (flex_conf->nb_payloads < RTE_DIM(flex_conf->flex_set)) {
+			idx = flex_conf->nb_payloads;
+			flex_conf->nb_payloads++;
+		} else {
+			printf("The flex payload table is full. Can not set"
+				" flex payload for type(%u).", cfg->type);
+			return;
+		}
+	}
+	(void)rte_memcpy(&flex_conf->flex_set[idx],
+			 cfg,
+			 sizeof(struct rte_eth_flex_payload_cfg));
+
 }
 
 void

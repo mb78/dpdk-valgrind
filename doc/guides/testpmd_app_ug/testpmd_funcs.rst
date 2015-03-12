@@ -103,7 +103,7 @@ stop
 quit
 ~~~~
 
-Quit to prompt in Linux or reboot on Baremetal:
+Quit to prompt:
 
 quit
 
@@ -150,13 +150,24 @@ For example:
         filter on
         qinq(extend) off
 
+show port rss reta
+~~~~~~~~~~~~~~~~~~
+
+Display the rss redirection table entry indicated by masks on port X:
+
+show port (port_id) rss reta (size) (mask0, mask1...)
+
+size is used to indicate the hardware supported reta size
+
 show port rss-hash
 ~~~~~~~~~~~~~~~~~~
 
-Display the RSS hash functions and RSS hash key of port (port_id).
+Display the RSS hash functions and RSS hash key of a port:
 
-show port (port_id) rss-hash [key] clear port
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+show port (port_id) rss-hash [key]
+
+clear port
+~~~~~~~~~~
 
 Clear the port statistics for a given port or for all ports:
 
@@ -435,26 +446,42 @@ Remove a VLAN ID, from the set of VLAN identifiers filtered for VF(s) for port I
 
 rx_vlan rm (vlan_id) port (port_id) vf (vf_mask)
 
-tx_rate (for Queue)
-~~~~~~~~~~~~~~~~~~~
-
-Set TX rate limitation for queue of a port ID:
-
-set port (port_id) queue (queue_id) rate (rate_value)
-
-tx_rate (for VF)
-~~~~~~~~~~~~~~~~
-
-Set TX rate limitation for queues in VF of a port ID:
-
-set port (port_id) vf (vf_id) rate (rate_value) queue_mask (queue_mask)
-
 rx_vlan set tpid
 ~~~~~~~~~~~~~~~~
 
 Set the outer VLAN TPID for packet filtering on a port:
 
 rx_vlan set tpid (value) (port_id)
+
+tunnel_filter add
+~~~~~~~~~~~~~~~~~
+
+Add a tunnel filter on a port:
+
+tunnel_filter add (port_id) (outer_mac) (inner_mac) (ip_addr) (inner_vlan)
+ (tunnel_type) (filter_type) (tenant_id) (queue_id)
+
+tunnel_filter remove
+~~~~~~~~~~~~~~~~~~~~
+
+Remove a tunnel filter on a port:
+
+tunnel_filter rm (port_id) (outer_mac) (inner_mac) (ip_addr) (inner_vlan)
+ (tunnel_type) (filter_type) (tenant_id) (queue_id)
+
+rx_vxlan_port add
+~~~~~~~~~~~~~~~~~
+
+Add an UDP port for VXLAN packet filter on a port:
+
+rx_vxlan_port add (udp_port) (port_id)
+
+rx_vxlan_port remove
+~~~~~~~~~~~~~~~~~~~~
+
+Remove an UDP port for VXLAN packet filter on a port:
+
+rx_vxlan_port rm (udp_port) (port_id)
 
 tx_vlan set
 ~~~~~~~~~~~
@@ -477,27 +504,45 @@ Disable hardware insertion of a VLAN header in packets sent on a port:
 
 tx_vlan reset (port_id)
 
-tx_checksum set mask
-~~~~~~~~~~~~~~~~~~~~
+tx_checksum set
+~~~~~~~~~~~~~~~
 
-Enable hardware insertion of checksum offload with a 4-bit mask, 0x0 - 0xF, in packets sent on a port:
+Select hardware or software calculation of the checksum when
+transmitting a packet using the csum forward engine:
 
-tx_checksum set (mask) (port_id)
+tx_cksum set (ip|udp|tcp|sctp|vxlan)
 
-The bits in the mask are:
-
-bit 0 - if set insert ip checksum offload
-
-bit 1 - if set insert udp checksum offload
-
-bit 2 - if set insert tcp checksum offload
-
-bit 3 - if set insert sctp checksum offload
+ip|udp|tcp|sctp always concern the inner layer.
+vxlan concerns the outer IP and UDP layer (in case the packet
+is recognized as a vxlan packet by the forward engine)
 
 .. note::
 
     Check the NIC Datasheet for hardware limits.
 
+tx_checksum show
+~~~~~~~~~~~~~~~~
+
+Display tx checksum offload configuration:
+
+tx_checksum show (port_id)
+
+tso set
+~~~~~~~
+
+Enable TCP Segmentation Offload in csum forward engine:
+
+tso set (segsize) (port_id)
+
+.. note::
+   Please check the NIC datasheet for HW limits
+
+tso show
+~~~~~~~~
+
+Display the status of TCP Segmentation Offload:
+
+tso show (port_id)
 
 set fwd
 ~~~~~~~
@@ -635,6 +680,14 @@ Set VF receive/transmit from a port:
 
 set port (port_id) vf (vf_id) (rx|tx) (on|off)
 
+set port - mac address filter (for VF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add/Remove unicast or multicast MAC addr filter for a VF:
+
+set port (port_id) vf (vf_id) (mac_addr)
+ (exact-mac|exact-mac-vlan|hashmac|hashmac-vlan) (on|off)
+
 set port - rx mode(for VF)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -651,6 +704,20 @@ The available receive modes are:
 *  BAM: accepts broadcast packets
 
 *  MPE: accepts all multicast packets
+
+set port - tx_rate (for Queue)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set TX rate limitation for queue of a port ID:
+
+set port (port_id) queue (queue_id) rate (rate_value)
+
+set port - tx_rate (for VF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set TX rate limitation for queues in VF of a port ID:
+
+set port (port_id) vf (vf_id) rate (rate_value) queue_mask (queue_mask)
 
 set port - mirror rule
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -718,305 +785,6 @@ Show the bypass configuration for a bypass enabled NIC using the lowest port on 
 
 show bypass config (port_id)
 
-add_ethertype_filter
-~~~~~~~~~~~~~~~~~~~~
-
-Add a L2 Ethertype filter, which identify packets by their L2 Ethertype mainly assign them to a receive queue.
-
-add_ethertype_filter (port_id) ethertype (eth_value) priority (enable|disable) (pri_value) queue (queue_id) index (idx)
-
-The available information parameters are:
-
-*   port_id:  the port which the Ethertype filter assigned on.
-
-*   eth_value: the EtherType value want to match,
-    for example 0x0806 for ARP packet. 0x0800 (IPv4) and 0x86DD (IPv6) are invalid.
-
-*   enable: user priority participates in the match.
-
-*   disable: user priority doesn't participate in the match.
-
-*   pri_value: user priority value that want to match.
-
-*   queue_id : The receive queue associated with this EtherType filter
-
-*   index: the index of this EtherType filter
-
-Example:
-
-.. code-block:: console
-
-    testpmd> add_ethertype_filter 0 ethertype 0x0806 priority disable 0 queue 3 index 0
-    Assign ARP packet to receive queue 3
-
-remove_ethertype_filter
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Remove a L2 Ethertype filter
-
-remove_ethertype_filter (port_id) index (idx)
-
-get_ethertype_filter
-~~~~~~~~~~~~~~~~~~~~
-
-Get and display a L2 Ethertype filter
-
-get_ethertype_filter (port_id) index (idx)
-
-Example:
-
-.. code-block:: console
-
-    testpmd> get_ethertype_filter 0 index 0
-
-    filter[0]:
-        ethertype: 0x0806
-        priority: disable, 0
-        queue: 3
-
-add_2tuple_filter
-~~~~~~~~~~~~~~~~~
-
-Add a 2-tuple filter,
-which identify packets by specific protocol and destination TCP/UDP port
-and forwards packets into one of the receive queues.
-
-add_2tuple_filter (port_id) protocol (pro_value) (pro_mask) dst_port (port_value) (port_mask)
-flags (flg_value) priority (prio_value) queue (queue_id) index (idx)
-
-The available information parameters are:
-
-*   port_id: the port which the 2-tuple filter assigned on.
-
-*   pro_value: IP L4 protocol
-
-*   pro_mask: protocol participates in the match or not, 1 means participate
-
-*   port_value: destination port in L4.
-
-*   port_mask: destination port participates in the match or not, 1 means participate.
-
-*   flg_value: TCP control bits. The non-zero value is invalid, when the pro_value is not set to 0x06 (TCP).
-
-*   prio_value: the priority of this filter.
-
-*   queue_id: The receive queue associated with this 2-tuple filter
-
-*   index: the index of this 2-tuple filter
-
-Example:
-
-.. code-block:: console
-
-    testpmd> add_2tuple_filter 0 protocol 0x06 1 dst_port 32 1 flags 0x02 priority 3 queue 3 index 0
-
-remove_2tuple_filter
-~~~~~~~~~~~~~~~~~~~~
-
-Remove a 2-tuple filter
-
-remove_2tuple_filter (port_id) index (idx)
-
-get_2tuple_filter
-~~~~~~~~~~~~~~~~~
-
-Get and display a 2-tuple filter
-
-get_2tuple_filter (port_id) index (idx)
-
-Example:
-
-.. code-block:: console
-
-    testpmd> get_2tuple_filter 0 index 0
-
-    filter[0]:
-        Destination Port: 0x0020 mask: 1
-        protocol: 0x06 mask:1 tcp_flags: 0x02
-        priority: 3   queue: 3
-
-add_5tuple_filter
-~~~~~~~~~~~~~~~~~
-
-Add a 5-tuple filter,
-which consists of a 5-tuple (protocol, source and destination IP addresses, source and destination TCP/UDP/SCTP port)
-and routes packets into one of the receive queues.
-
-add_5tuple_filter (port_id) dst_ip (dst_address) src_ip (src_address) dst_port (dst_port_value) src_port (src_port_value)
-protocol (protocol_value) mask (mask_value) flags (flags_value) priority (prio_value) queue (queue_id) index (idx)
-
-The available information parameters are:
-
-*   port_id: the port which the 5-tuple filter assigned on.
-
-*   dst_address: destination IP address.
-
-*   src_address: source IP address.
-
-*   dst_port_value: TCP/UDP destination port.
-
-*   src_port_value: TCP/UDP source port.
-
-*   protocol_value: L4 protocol.
-
-*   mask_value: participates in the match or not by bit for field above, 1b means participate
-
-*   flags_value: TCP control bits. The non-zero value is invalid, when the protocol_value is not set to 0x06 (TCP).
-
-*   prio_value: the priority of this filter.
-
-*   queue_id: The receive queue associated with this 5-tuple filter.
-
-*   index: the index of this 5-tuple filter
-
-Example:
-
-.. code-block:: console
-
-    testpmd> add_5tuple_filter 1 dst_ip 2.2.2.5 src_ip 2.2.2.4 dst_port 64 src_port 32 protocol 0x06 mask 0x1F flags 0x0 priority 3 queue 3 index 0
-
-remove_5tuple_filter
-~~~~~~~~~~~~~~~~~~~~
-
-Remove a 5-tuple filter
-
-remove_5tuple_filter (port_id) index (idx)
-
-get_5tuple_filter
-~~~~~~~~~~~~~~~~~
-
-Get and display a 5-tuple filter
-
-get_5tuple_filter (port_id) index (idx)
-
-Example:
-
-.. code-block:: console
-
-    testpmd> get_5tuple_filter 1 index 0
-
-    filter[0]:
-        Destination IP: 0x02020205 mask: 1
-        Source IP: 0x02020204 mask: 1
-        Destination Port: 0x0040 mask: 1
-        Source Port: 0x0020 mask: 1
-        protocol: 0x06 mask: 1
-        priority: 3 flags: 0x00 queue: 3
-
-add_syn_filter
-~~~~~~~~~~~~~~
-
-Add SYN filter, which can forward TCP packets whose *SYN* flag is set into a separate queue.
-
-add_syn_filter (port_id) priority (high|low) queue (queue_id)
-
-The available information parameters are:
-
-*   port_id: the port which the SYN filter assigned on.
-
-*   high: this SYN filter has higher priority than other filters.
-
-*   low: this SYN filter has lower priority than other filters.
-
-*   queue_id: The receive queue associated with this SYN filter
-
-Example:
-
-.. code-block:: console
-
-    testpmd> add_syn_filter 0 priority high queue 3,
-
-remove_syn_filter
-~~~~~~~~~~~~~~~~~
-
-Remove SYN filter
-
-remove_syn_filter (port_id)
-
-get_syn_filter
-~~~~~~~~~~~~~~
-
-Get and display SYN filter
-
-get_syn_filter (port_id)
-
-Example:
-
-.. code-block:: console
-
-    testpmd> get_syn_filter 0
-
-    syn filter: on, priority: high, queue: 3
-
-add_flex_filter
-~~~~~~~~~~~~~~~
-
-Add a Flex filter,
-which recognizes any arbitrary pattern within the first 128 bytes of the packet
-and routes packets into one of the receive queues.
-
-add_flex_filter (port_id) len (len_value) bytes (bytes_string) mask (mask_value)
-priority (prio_value) queue (queue_id) index (idx)
-
-The available information parameters are:
-
-*   port_id: the port which the Flex filter assigned on.
-
-*   len_value: filter length in byte, no greater than 128.
-
-*   bytes_string: a sting in format of octal, means the value the flex filter need to match.
-
-*   mask_value: a sting in format of octal, bit 1 means corresponding byte in DWORD participates in the match.
-
-*   prio_value: the priority of this filter.
-
-*   queue_id: The receive queue associated with this Flex filter.
-
-*   index: the index of this Flex filter
-
-Example:
-
-.. code-block:: console
-
-   testpmd> add_flex_filter 0 len 16 bytes 0x00000000000000000000000008060000 mask 000C priority 3 queue 3 index 0
-
-Assign a packet whose 13th and 14th bytes are 0x0806 to queue 3.
-
-remove_flex_filter
-~~~~~~~~~~~~~~~~~~
-
-Remove a Flex filter
-
-remove_flex_filter (port_id) index (idx)
-
-get_flex_filter
-~~~~~~~~~~~~~~~
-
-Get and display a Flex filter
-
-get_flex_filter (port_id) index (idx)
-
-Example:
-
-.. code-block:: console
-
-    testpmd> get_flex_filter 0 index 0
-
-    filter[0]:
-
-        length: 16
-
-        dword[]: 0x00000000 00000000 00000000 08060000 00000000 00000000 00000000
-    00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
-    00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
-    00000000 00000000 00000000 00000000 00000000 00000000 00000000
-
-        mask[]:
-    0b0000000000001100000000000000000000000000000000000000000000000000000000
-    0000000000000000000000000000000000000000000000000000000000
-
-        priority: 3   queue: 3
-
 set link up
 ~~~~~~~~~~~
 
@@ -1060,6 +828,15 @@ port close
 Close all ports or a specific port:
 
 port close (port_id|all)
+
+port start/stop queue
+~~~~~~~~~~~~~~~~~~~~~
+
+Start/stop a rx/tx queue on a specific port:
+
+port (port_id) (rxq|txq) (queue_id) (start|stop)
+
+Only take effect when port is started.
 
 port config - speed
 ~~~~~~~~~~~~~~~~~~~
@@ -1479,6 +1256,25 @@ For example, set a Link Bonding device (port 10) to use a balance policy of laye
 
     testpmd> set bonding xmit_balance_policy 10 l34
 
+
+set bonding mon_period
+~~~~~~~~~~~~~~~~~~~~~~
+
+Set the link status monitoring polling period in milliseconds for a bonding devicie.
+
+This adds support for PMD slave devices which do not support link status interrupts.
+When the mon_period is set to a value greater than 0 then all PMD's which do not support
+link status ISR will be queried every polling interval to check if their link status has changed.
+
+set bonding mon_period (port_id) (value)
+
+For example, to set the link status monitoring polling period of bonded device (port 5) to 150ms
+
+.. code-block:: console
+
+    testpmd> set bonding mon_period 5 150
+
+
 show bonding config
 ~~~~~~~~~~~~~~~~~~~
 
@@ -1590,3 +1386,307 @@ For example, to set the high bit in the register from the example above:
 
     testpmd> write regbit 0 0xEE00 31 1
     port 0 PCI register at offset 0xEE00: 0x8000000A (2147483658)
+
+Filter Functions
+----------------
+
+This section details the available filter functions that are available.
+
+add_ethertype_filter
+~~~~~~~~~~~~~~~~~~~~
+
+Add a L2 Ethertype filter, which identify packets by their L2 Ethertype mainly assign them to a receive queue.
+
+add_ethertype_filter (port_id) ethertype (eth_value) priority (enable|disable) (pri_value) queue (queue_id) index (idx)
+
+The available information parameters are:
+
+*   port_id:  the port which the Ethertype filter assigned on.
+
+*   eth_value: the EtherType value want to match,
+    for example 0x0806 for ARP packet. 0x0800 (IPv4) and 0x86DD (IPv6) are invalid.
+
+*   enable: user priority participates in the match.
+
+*   disable: user priority doesn't participate in the match.
+
+*   pri_value: user priority value that want to match.
+
+*   queue_id : The receive queue associated with this EtherType filter
+
+*   index: the index of this EtherType filter
+
+Example:
+
+.. code-block:: console
+
+    testpmd> add_ethertype_filter 0 ethertype 0x0806 priority disable 0 queue 3 index 0
+    Assign ARP packet to receive queue 3
+
+remove_ethertype_filter
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Remove a L2 Ethertype filter
+
+remove_ethertype_filter (port_id) index (idx)
+
+get_ethertype_filter
+~~~~~~~~~~~~~~~~~~~~
+
+Get and display a L2 Ethertype filter
+
+get_ethertype_filter (port_id) index (idx)
+
+Example:
+
+.. code-block:: console
+
+    testpmd> get_ethertype_filter 0 index 0
+
+    filter[0]:
+        ethertype: 0x0806
+        priority: disable, 0
+        queue: 3
+
+add_2tuple_filter
+~~~~~~~~~~~~~~~~~
+
+Add a 2-tuple filter,
+which identify packets by specific protocol and destination TCP/UDP port
+and forwards packets into one of the receive queues.
+
+add_2tuple_filter (port_id) protocol (pro_value) (pro_mask) dst_port (port_value) (port_mask)
+flags (flg_value) priority (prio_value) queue (queue_id) index (idx)
+
+The available information parameters are:
+
+*   port_id: the port which the 2-tuple filter assigned on.
+
+*   pro_value: IP L4 protocol
+
+*   pro_mask: protocol participates in the match or not, 1 means participate
+
+*   port_value: destination port in L4.
+
+*   port_mask: destination port participates in the match or not, 1 means participate.
+
+*   flg_value: TCP control bits. The non-zero value is invalid, when the pro_value is not set to 0x06 (TCP).
+
+*   prio_value: the priority of this filter.
+
+*   queue_id: The receive queue associated with this 2-tuple filter
+
+*   index: the index of this 2-tuple filter
+
+Example:
+
+.. code-block:: console
+
+    testpmd> add_2tuple_filter 0 protocol 0x06 1 dst_port 32 1 flags 0x02 priority 3 queue 3 index 0
+
+remove_2tuple_filter
+~~~~~~~~~~~~~~~~~~~~
+
+Remove a 2-tuple filter
+
+remove_2tuple_filter (port_id) index (idx)
+
+get_2tuple_filter
+~~~~~~~~~~~~~~~~~
+
+Get and display a 2-tuple filter
+
+get_2tuple_filter (port_id) index (idx)
+
+Example:
+
+.. code-block:: console
+
+    testpmd> get_2tuple_filter 0 index 0
+
+    filter[0]:
+        Destination Port: 0x0020 mask: 1
+        protocol: 0x06 mask:1 tcp_flags: 0x02
+        priority: 3   queue: 3
+
+add_5tuple_filter
+~~~~~~~~~~~~~~~~~
+
+Add a 5-tuple filter,
+which consists of a 5-tuple (protocol, source and destination IP addresses, source and destination TCP/UDP/SCTP port)
+and routes packets into one of the receive queues.
+
+add_5tuple_filter (port_id) dst_ip (dst_address) src_ip (src_address) dst_port (dst_port_value) src_port (src_port_value)
+protocol (protocol_value) mask (mask_value) flags (flags_value) priority (prio_value) queue (queue_id) index (idx)
+
+The available information parameters are:
+
+*   port_id: the port which the 5-tuple filter assigned on.
+
+*   dst_address: destination IP address.
+
+*   src_address: source IP address.
+
+*   dst_port_value: TCP/UDP destination port.
+
+*   src_port_value: TCP/UDP source port.
+
+*   protocol_value: L4 protocol.
+
+*   mask_value: participates in the match or not by bit for field above, 1b means participate
+
+*   flags_value: TCP control bits. The non-zero value is invalid, when the protocol_value is not set to 0x06 (TCP).
+
+*   prio_value: the priority of this filter.
+
+*   queue_id: The receive queue associated with this 5-tuple filter.
+
+*   index: the index of this 5-tuple filter
+
+Example:
+
+.. code-block:: console
+
+    testpmd> add_5tuple_filter 1 dst_ip 2.2.2.5 src_ip 2.2.2.4 dst_port 64 src_port 32 protocol 0x06 mask 0x1F flags 0x0 priority 3 queue 3 index 0
+
+remove_5tuple_filter
+~~~~~~~~~~~~~~~~~~~~
+
+Remove a 5-tuple filter
+
+remove_5tuple_filter (port_id) index (idx)
+
+get_5tuple_filter
+~~~~~~~~~~~~~~~~~
+
+Get and display a 5-tuple filter
+
+get_5tuple_filter (port_id) index (idx)
+
+Example:
+
+.. code-block:: console
+
+    testpmd> get_5tuple_filter 1 index 0
+
+    filter[0]:
+        Destination IP: 0x02020205 mask: 1
+        Source IP: 0x02020204 mask: 1
+        Destination Port: 0x0040 mask: 1
+        Source Port: 0x0020 mask: 1
+        protocol: 0x06 mask: 1
+        priority: 3 flags: 0x00 queue: 3
+
+add_syn_filter
+~~~~~~~~~~~~~~
+
+Add SYN filter, which can forward TCP packets whose *SYN* flag is set into a separate queue.
+
+add_syn_filter (port_id) priority (high|low) queue (queue_id)
+
+The available information parameters are:
+
+*   port_id: the port which the SYN filter assigned on.
+
+*   high: this SYN filter has higher priority than other filters.
+
+*   low: this SYN filter has lower priority than other filters.
+
+*   queue_id: The receive queue associated with this SYN filter
+
+Example:
+
+.. code-block:: console
+
+    testpmd> add_syn_filter 0 priority high queue 3,
+
+remove_syn_filter
+~~~~~~~~~~~~~~~~~
+
+Remove SYN filter
+
+remove_syn_filter (port_id)
+
+get_syn_filter
+~~~~~~~~~~~~~~
+
+Get and display SYN filter
+
+get_syn_filter (port_id)
+
+Example:
+
+.. code-block:: console
+
+    testpmd> get_syn_filter 0
+
+    syn filter: on, priority: high, queue: 3
+
+add_flex_filter
+~~~~~~~~~~~~~~~
+
+Add a Flex filter,
+which recognizes any arbitrary pattern within the first 128 bytes of the packet
+and routes packets into one of the receive queues.
+
+add_flex_filter (port_id) len (len_value) bytes (bytes_string) mask (mask_value)
+priority (prio_value) queue (queue_id) index (idx)
+
+The available information parameters are:
+
+*   port_id: the port which the Flex filter assigned on.
+
+*   len_value: filter length in byte, no greater than 128.
+
+*   bytes_string: a sting in format of octal, means the value the flex filter need to match.
+
+*   mask_value: a sting in format of octal, bit 1 means corresponding byte in DWORD participates in the match.
+
+*   prio_value: the priority of this filter.
+
+*   queue_id: The receive queue associated with this Flex filter.
+
+*   index: the index of this Flex filter
+
+Example:
+
+.. code-block:: console
+
+   testpmd> add_flex_filter 0 len 16 bytes 0x00000000000000000000000008060000 mask 000C priority 3 queue 3 index 0
+
+Assign a packet whose 13th and 14th bytes are 0x0806 to queue 3.
+
+remove_flex_filter
+~~~~~~~~~~~~~~~~~~
+
+Remove a Flex filter
+
+remove_flex_filter (port_id) index (idx)
+
+get_flex_filter
+~~~~~~~~~~~~~~~
+
+Get and display a Flex filter
+
+get_flex_filter (port_id) index (idx)
+
+Example:
+
+.. code-block:: console
+
+    testpmd> get_flex_filter 0 index 0
+
+    filter[0]:
+
+        length: 16
+
+        dword[]: 0x00000000 00000000 00000000 08060000 00000000 00000000 00000000
+    00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+    00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+    00000000 00000000 00000000 00000000 00000000 00000000 00000000
+
+        mask[]:
+    0b0000000000001100000000000000000000000000000000000000000000000000000000
+    0000000000000000000000000000000000000000000000000000000000
+
+        priority: 3   queue: 3

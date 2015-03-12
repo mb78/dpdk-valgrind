@@ -68,6 +68,7 @@
 #include "ixgbe/ixgbe_common.h"
 #include "ixgbe_ethdev.h"
 #include "ixgbe_bypass.h"
+#include "ixgbe_rxtx.h"
 
 /*
  * High threshold controlling when to start sending XOFF frames. Must be at
@@ -106,6 +107,12 @@
 #define IXGBE_DEFAULT_TX_WTHRESH      0
 #define IXGBE_DEFAULT_TX_RSBIT_THRESH 32
 
+/* Bit shift and mask */
+#define IXGBE_4_BIT_WIDTH  (CHAR_BIT / 2)
+#define IXGBE_4_BIT_MASK   RTE_LEN2MASK(IXGBE_4_BIT_WIDTH, uint8_t)
+#define IXGBE_8_BIT_WIDTH  CHAR_BIT
+#define IXGBE_8_BIT_MASK   UINT8_MAX
+
 #define IXGBEVF_PMD_NAME "rte_ixgbevf_pmd" /* PMD name */
 
 #define IXGBE_QUEUE_STAT_COUNTERS (sizeof(hw_stats->qprc) / sizeof(hw_stats->qprc[0]))
@@ -132,8 +139,9 @@ static int ixgbe_dev_queue_stats_mapping_set(struct rte_eth_dev *eth_dev,
 					     uint8_t stat_idx,
 					     uint8_t is_rx);
 static void ixgbe_dev_info_get(struct rte_eth_dev *dev,
-				struct rte_eth_dev_info *dev_info);
-
+			       struct rte_eth_dev_info *dev_info);
+static void ixgbevf_dev_info_get(struct rte_eth_dev *dev,
+				 struct rte_eth_dev_info *dev_info);
 static int ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 
 static int ixgbe_vlan_filter_set(struct rte_eth_dev *dev,
@@ -158,9 +166,11 @@ static int ixgbe_flow_ctrl_set(struct rte_eth_dev *dev,
 static int ixgbe_priority_flow_ctrl_set(struct rte_eth_dev *dev,
 		struct rte_eth_pfc_conf *pfc_conf);
 static int ixgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
-		struct rte_eth_rss_reta *reta_conf);
+			struct rte_eth_rss_reta_entry64 *reta_conf,
+			uint16_t reta_size);
 static int ixgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
-		struct rte_eth_rss_reta *reta_conf);
+			struct rte_eth_rss_reta_entry64 *reta_conf,
+			uint16_t reta_size);
 static void ixgbe_dev_link_status_print(struct rte_eth_dev *dev);
 static int ixgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev);
 static int ixgbe_dev_interrupt_get_status(struct rte_eth_dev *dev);
@@ -391,7 +401,7 @@ static struct eth_dev_ops ixgbevf_eth_dev_ops = {
 	.stats_get            = ixgbevf_dev_stats_get,
 	.stats_reset          = ixgbevf_dev_stats_reset,
 	.dev_close            = ixgbevf_dev_close,
-	.dev_infos_get        = ixgbe_dev_info_get,
+	.dev_infos_get        = ixgbevf_dev_info_get,
 	.mtu_set              = ixgbevf_dev_set_mtu,
 	.vlan_filter_set      = ixgbevf_vlan_filter_set,
 	.vlan_strip_queue_set = ixgbevf_vlan_strip_queue_set,
@@ -732,10 +742,24 @@ eth_ixgbe_dev_init(__attribute__((unused)) struct eth_driver *eth_drv,
 	eth_dev->rx_pkt_burst = &ixgbe_recv_pkts;
 	eth_dev->tx_pkt_burst = &ixgbe_xmit_pkts;
 
-	/* for secondary processes, we don't initialise any further as primary
+	/*
+	 * For secondary processes, we don't initialise any further as primary
 	 * has already done this work. Only check we don't need a different
-	 * RX function */
+	 * RX and TX function.
+	 */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY){
+		struct igb_tx_queue *txq;
+		/* TX queue function in primary, set by last queue initialized
+		 * Tx queue may not initialized by primary process */
+		if (eth_dev->data->tx_queues) {
+			txq = eth_dev->data->tx_queues[eth_dev->data->nb_tx_queues-1];
+			set_tx_function(eth_dev, txq);
+		} else {
+			/* Use default TX function if we get here */
+			PMD_INIT_LOG(INFO, "No TX queues configured yet. "
+			                   "Using default TX function.");
+		}
+
 		if (eth_dev->data->scattered_rx)
 			eth_dev->rx_pkt_burst = ixgbe_recv_scattered_pkts;
 		return 0;
@@ -1452,6 +1476,7 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	if (status != 0)
 		return -1;
 	hw->mac.ops.start_hw(hw);
+	hw->mac.get_link_status = true;
 
 	/* configure PF module if SRIOV enabled */
 	ixgbe_pf_host_configure(dev);
@@ -1964,28 +1989,80 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		DEV_TX_OFFLOAD_IPV4_CKSUM  |
 		DEV_TX_OFFLOAD_UDP_CKSUM   |
 		DEV_TX_OFFLOAD_TCP_CKSUM   |
-		DEV_TX_OFFLOAD_SCTP_CKSUM;
+		DEV_TX_OFFLOAD_SCTP_CKSUM  |
+		DEV_TX_OFFLOAD_TCP_TSO;
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
-			.rx_thresh = {
-				.pthresh = IXGBE_DEFAULT_RX_PTHRESH,
-				.hthresh = IXGBE_DEFAULT_RX_HTHRESH,
-				.wthresh = IXGBE_DEFAULT_RX_WTHRESH,
-			},
-			.rx_free_thresh = IXGBE_DEFAULT_RX_FREE_THRESH,
-			.rx_drop_en = 0,
+		.rx_thresh = {
+			.pthresh = IXGBE_DEFAULT_RX_PTHRESH,
+			.hthresh = IXGBE_DEFAULT_RX_HTHRESH,
+			.wthresh = IXGBE_DEFAULT_RX_WTHRESH,
+		},
+		.rx_free_thresh = IXGBE_DEFAULT_RX_FREE_THRESH,
+		.rx_drop_en = 0,
 	};
 
+	dev_info->default_txconf = (struct rte_eth_txconf) {
+		.tx_thresh = {
+			.pthresh = IXGBE_DEFAULT_TX_PTHRESH,
+			.hthresh = IXGBE_DEFAULT_TX_HTHRESH,
+			.wthresh = IXGBE_DEFAULT_TX_WTHRESH,
+		},
+		.tx_free_thresh = IXGBE_DEFAULT_TX_FREE_THRESH,
+		.tx_rs_thresh = IXGBE_DEFAULT_TX_RSBIT_THRESH,
+		.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS |
+				ETH_TXQ_FLAGS_NOOFFLOADS,
+	};
+	dev_info->reta_size = ETH_RSS_RETA_SIZE_128;
+}
 
-	 dev_info->default_txconf = (struct rte_eth_txconf) {
-			.tx_thresh = {
-				.pthresh = IXGBE_DEFAULT_TX_PTHRESH,
-				.hthresh = IXGBE_DEFAULT_TX_HTHRESH,
-				.wthresh = IXGBE_DEFAULT_TX_WTHRESH,
-			},
-			.tx_free_thresh = IXGBE_DEFAULT_TX_FREE_THRESH,
-			.tx_rs_thresh = IXGBE_DEFAULT_TX_RSBIT_THRESH,
-			.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOOFFLOADS,
+static void
+ixgbevf_dev_info_get(struct rte_eth_dev *dev,
+		     struct rte_eth_dev_info *dev_info)
+{
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	dev_info->max_rx_queues = (uint16_t)hw->mac.max_rx_queues;
+	dev_info->max_tx_queues = (uint16_t)hw->mac.max_tx_queues;
+	dev_info->min_rx_bufsize = 1024; /* cf BSIZEPACKET in SRRCTL reg */
+	dev_info->max_rx_pktlen = 15872; /* includes CRC, cf MAXFRS reg */
+	dev_info->max_mac_addrs = hw->mac.num_rar_entries;
+	dev_info->max_hash_mac_addrs = IXGBE_VMDQ_NUM_UC_MAC;
+	dev_info->max_vfs = dev->pci_dev->max_vfs;
+	if (hw->mac.type == ixgbe_mac_82598EB)
+		dev_info->max_vmdq_pools = ETH_16_POOLS;
+	else
+		dev_info->max_vmdq_pools = ETH_64_POOLS;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP |
+				DEV_RX_OFFLOAD_IPV4_CKSUM |
+				DEV_RX_OFFLOAD_UDP_CKSUM  |
+				DEV_RX_OFFLOAD_TCP_CKSUM;
+	dev_info->tx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT |
+				DEV_TX_OFFLOAD_IPV4_CKSUM  |
+				DEV_TX_OFFLOAD_UDP_CKSUM   |
+				DEV_TX_OFFLOAD_TCP_CKSUM   |
+				DEV_TX_OFFLOAD_SCTP_CKSUM;
+
+	dev_info->default_rxconf = (struct rte_eth_rxconf) {
+		.rx_thresh = {
+			.pthresh = IXGBE_DEFAULT_RX_PTHRESH,
+			.hthresh = IXGBE_DEFAULT_RX_HTHRESH,
+			.wthresh = IXGBE_DEFAULT_RX_WTHRESH,
+		},
+		.rx_free_thresh = IXGBE_DEFAULT_RX_FREE_THRESH,
+		.rx_drop_en = 0,
+	};
+
+	dev_info->default_txconf = (struct rte_eth_txconf) {
+		.tx_thresh = {
+			.pthresh = IXGBE_DEFAULT_TX_PTHRESH,
+			.hthresh = IXGBE_DEFAULT_TX_HTHRESH,
+			.wthresh = IXGBE_DEFAULT_TX_WTHRESH,
+		},
+		.tx_free_thresh = IXGBE_DEFAULT_TX_FREE_THRESH,
+		.tx_rs_thresh = IXGBE_DEFAULT_TX_RSBIT_THRESH,
+		.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS |
+				ETH_TXQ_FLAGS_NOOFFLOADS,
 	};
 }
 
@@ -1995,7 +2072,7 @@ ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_eth_link link, old;
-	ixgbe_link_speed link_speed;
+	ixgbe_link_speed link_speed = IXGBE_LINK_SPEED_UNKNOWN;
 	int link_up;
 	int diag;
 
@@ -2017,6 +2094,12 @@ ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		if (link.link_status == old.link_status)
 			return -1;
 		return 0;
+	}
+
+	if (link_speed == IXGBE_LINK_SPEED_UNKNOWN &&
+	    !hw->mac.get_link_status) {
+		memcpy(&link, &old, sizeof(link));
+		return -1;
 	}
 
 	if (link_up == 0) {
@@ -2663,38 +2746,42 @@ ixgbe_priority_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_pfc_conf *p
 
 static int
 ixgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
-				struct rte_eth_rss_reta *reta_conf)
+			  struct rte_eth_rss_reta_entry64 *reta_conf,
+			  uint16_t reta_size)
 {
-	uint8_t i,j,mask;
-	uint32_t reta;
-	struct ixgbe_hw *hw =
-			IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	uint8_t i, j, mask;
+	uint32_t reta, r;
+	uint16_t idx, shift;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
-	/*
-	* Update Redirection Table RETA[n],n=0...31,The redirection table has
-	* 128-entries in 32 registers
-	 */
-	for(i = 0; i < ETH_RSS_RETA_NUM_ENTRIES; i += 4) {
-		if (i < ETH_RSS_RETA_NUM_ENTRIES/2)
-			mask = (uint8_t)((reta_conf->mask_lo >> i) & 0xF);
-		else
-			mask = (uint8_t)((reta_conf->mask_hi >>
-				(i - ETH_RSS_RETA_NUM_ENTRIES/2)) & 0xF);
-		if (mask != 0) {
-			reta = 0;
-			if (mask != 0xF)
-				reta = IXGBE_READ_REG(hw,IXGBE_RETA(i >> 2));
+	if (reta_size != ETH_RSS_RETA_SIZE_128) {
+		PMD_DRV_LOG(ERR, "The size of hash lookup table configured "
+			"(%d) doesn't match the number hardware can supported "
+			"(%d)\n", reta_size, ETH_RSS_RETA_SIZE_128);
+		return -EINVAL;
+	}
 
-			for (j = 0; j < 4; j++) {
-				if (mask & (0x1 << j)) {
-					if (mask != 0xF)
-						reta &= ~(0xFF << 8 * j);
-					reta |= reta_conf->reta[i + j] << 8*j;
-				}
-			}
-			IXGBE_WRITE_REG(hw, IXGBE_RETA(i >> 2),reta);
+	for (i = 0; i < reta_size; i += IXGBE_4_BIT_WIDTH) {
+		idx = i / RTE_RETA_GROUP_SIZE;
+		shift = i % RTE_RETA_GROUP_SIZE;
+		mask = (uint8_t)((reta_conf[idx].mask >> shift) &
+						IXGBE_4_BIT_MASK);
+		if (!mask)
+			continue;
+		if (mask == IXGBE_4_BIT_MASK)
+			r = 0;
+		else
+			r = IXGBE_READ_REG(hw, IXGBE_RETA(i >> 2));
+		for (j = 0, reta = 0; j < IXGBE_4_BIT_WIDTH; j++) {
+			if (mask & (0x1 << j))
+				reta |= reta_conf[idx].reta[shift + j] <<
+							(CHAR_BIT * j);
+			else
+				reta |= r & (IXGBE_8_BIT_MASK <<
+						(CHAR_BIT * j));
 		}
+		IXGBE_WRITE_REG(hw, IXGBE_RETA(i >> 2), reta);
 	}
 
 	return 0;
@@ -2702,32 +2789,36 @@ ixgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
 
 static int
 ixgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
-				struct rte_eth_rss_reta *reta_conf)
+			 struct rte_eth_rss_reta_entry64 *reta_conf,
+			 uint16_t reta_size)
 {
-	uint8_t i,j,mask;
+	uint8_t i, j, mask;
 	uint32_t reta;
-	struct ixgbe_hw *hw =
-			IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	uint16_t idx, shift;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
-	/*
-	 * Read Redirection Table RETA[n],n=0...31,The redirection table has
-	 * 128-entries in 32 registers
-	 */
-	for(i = 0; i < ETH_RSS_RETA_NUM_ENTRIES; i += 4) {
-		if (i < ETH_RSS_RETA_NUM_ENTRIES/2)
-			mask = (uint8_t)((reta_conf->mask_lo >> i) & 0xF);
-		else
-			mask = (uint8_t)((reta_conf->mask_hi >>
-				(i - ETH_RSS_RETA_NUM_ENTRIES/2)) & 0xF);
+	if (reta_size != ETH_RSS_RETA_SIZE_128) {
+		PMD_DRV_LOG(ERR, "The size of hash lookup table configured "
+			"(%d) doesn't match the number hardware can supported "
+				"(%d)\n", reta_size, ETH_RSS_RETA_SIZE_128);
+		return -EINVAL;
+	}
 
-		if (mask != 0) {
-			reta = IXGBE_READ_REG(hw,IXGBE_RETA(i >> 2));
-			for (j = 0; j < 4; j++) {
-				if (mask & (0x1 << j))
-					reta_conf->reta[i + j] =
-						(uint8_t)((reta >> 8 * j) & 0xFF);
-			}
+	for (i = 0; i < ETH_RSS_RETA_SIZE_128; i += IXGBE_4_BIT_WIDTH) {
+		idx = i / RTE_RETA_GROUP_SIZE;
+		shift = i % RTE_RETA_GROUP_SIZE;
+		mask = (uint8_t)((reta_conf[idx].mask >> shift) &
+						IXGBE_4_BIT_MASK);
+		if (!mask)
+			continue;
+
+		reta = IXGBE_READ_REG(hw, IXGBE_RETA(i >> 2));
+		for (j = 0; j < IXGBE_4_BIT_WIDTH; j++) {
+			if (mask & (0x1 << j))
+				reta_conf[idx].reta[shift + j] =
+					((reta >> (CHAR_BIT * j)) &
+						IXGBE_8_BIT_MASK);
 		}
 	}
 
@@ -2849,6 +2940,7 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	PMD_INIT_FUNC_TRACE();
 
 	hw->mac.ops.reset_hw(hw);
+	hw->mac.get_link_status = true;
 
 	/* negotiate mailbox API version to use with the PF. */
 	ixgbevf_negotiate_api(hw);

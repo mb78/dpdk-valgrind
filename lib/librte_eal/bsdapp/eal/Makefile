@@ -36,6 +36,7 @@ LIB = librte_eal.a
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 
 CFLAGS += -I$(SRCDIR)/include
+CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common/include
 CFLAGS += -I$(RTE_SDK)/lib/librte_ring
 CFLAGS += -I$(RTE_SDK)/lib/librte_mempool
@@ -85,7 +86,7 @@ CFLAGS_eal_thread.o += -Wno-return-type
 CFLAGS_eal_hpet.o += -Wno-return-type
 endif
 
-INC := rte_per_lcore.h rte_lcore.h rte_interrupts.h
+INC := rte_interrupts.h
 
 SYMLINK-$(CONFIG_RTE_LIBRTE_EAL_BSDAPP)-include/exec-env := \
 	$(addprefix include/exec-env/,$(INC))

@@ -69,14 +69,14 @@ extern "C" {
 /**
  * Extra string to be appended to version number
  */
-#define RTE_VER_SUFFIX "-rc"
+#define RTE_VER_SUFFIX ""
 
 /**
  * Patch release number
  *   0-15 = release candidates
  *   16   = release
  */
-#define RTE_VER_PATCH_RELEASE 1
+#define RTE_VER_PATCH_RELEASE 16
 
 /**
  * Macro to compute a version number usable for comparisons
@@ -104,13 +104,13 @@ rte_version(void)
 	if (version[0] != 0)
 		return version;
 	if (strlen(RTE_VER_SUFFIX) == 0)
-		sprintf(version, "%s %d.%d.%d",
+		snprintf(version, sizeof(version), "%s %d.%d.%d",
 			RTE_VER_PREFIX,
 			RTE_VER_MAJOR,
 			RTE_VER_MINOR,
 			RTE_VER_PATCH_LEVEL);
 	else
-		sprintf(version, "%s %d.%d.%d%s%d",
+		snprintf(version, sizeof(version), "%s %d.%d.%d%s%d",
 			RTE_VER_PREFIX,
 			RTE_VER_MAJOR,
 			RTE_VER_MINOR,

@@ -88,7 +88,7 @@ arp_op_name(uint16_t arp_op)
 }
 
 static const char *
-ip_proto_name(uint8_t ip_proto)
+ip_proto_name(uint16_t ip_proto)
 {
 	static const char * ip_proto_names[] = {
 		"IP6HOPOPTS", /**< IP6 hop-by-hop options */
@@ -221,12 +221,16 @@ ip_proto_name(uint8_t ip_proto)
 	if (ip_proto < sizeof(ip_proto_names) / sizeof(ip_proto_names[0]))
 		return ip_proto_names[ip_proto];
 	switch (ip_proto) {
+#ifdef IPPROTO_PGM
 	case IPPROTO_PGM:  /**< PGM */
 		return "PGM";
+#endif
 	case IPPROTO_SCTP:  /**< Stream Control Transport Protocol */
 		return "SCTP";
+#ifdef IPPROTO_DIVERT
 	case IPPROTO_DIVERT: /**< divert pseudo-protocol */
 		return "DIVERT";
+#endif
 	case IPPROTO_RAW: /**< raw IP packet */
 		return "RAW";
 	default:

@@ -61,6 +61,8 @@ ifeq ($(NO_AUTOLIBS),)
 
 LDLIBS += --whole-archive
 
+ifeq ($(CONFIG_RTE_BUILD_COMBINE_LIBS),n)
+
 ifeq ($(CONFIG_RTE_LIBRTE_DISTRIBUTOR),y)
 LDLIBS += -lrte_distributor
 endif
@@ -119,7 +121,15 @@ LDLIBS += -lm
 LDLIBS += -lrt
 endif
 
+endif # ! CONFIG_RTE_BUILD_COMBINE_LIBS
+
+ifeq ($(CONFIG_RTE_LIBRTE_PMD_PCAP),y)
+LDLIBS += -lpcap
+endif
+
 LDLIBS += --start-group
+
+ifeq ($(CONFIG_RTE_BUILD_COMBINE_LIBS),n)
 
 ifeq ($(CONFIG_RTE_LIBRTE_KVARGS),y)
 LDLIBS += -lrte_kvargs
@@ -147,15 +157,6 @@ endif
 
 ifeq ($(CONFIG_RTE_LIBRTE_RING),y)
 LDLIBS += -lrte_ring
-endif
-
-ifeq ($(CONFIG_RTE_LIBC),y)
-LDLIBS += -lc
-LDLIBS += -lm
-endif
-
-ifeq ($(CONFIG_RTE_LIBGLOSS),y)
-LDLIBS += -lgloss
 endif
 
 ifeq ($(CONFIG_RTE_LIBRTE_EAL),y)
@@ -195,6 +196,10 @@ LDLIBS += -lrte_vhost
 LDLIBS += -lfuse
 endif
 
+ifeq ($(CONFIG_RTE_LIBRTE_ENIC_PMD),y)
+LDLIBS += -lrte_pmd_enic
+endif
+
 ifeq ($(CONFIG_RTE_LIBRTE_I40E_PMD),y)
 LDLIBS += -lrte_pmd_i40e
 endif
@@ -212,10 +217,16 @@ LDLIBS += -lrte_pmd_ring
 endif
 
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_PCAP),y)
-LDLIBS += -lrte_pmd_pcap -lpcap
+LDLIBS += -lrte_pmd_pcap
+endif
+
+ifeq ($(CONFIG_RTE_LIBRTE_PMD_AF_PACKET),y)
+LDLIBS += -lrte_pmd_af_packet
 endif
 
 endif # plugins
+
+endif # ! CONFIG_RTE_BUILD_COMBINE_LIBS
 
 LDLIBS += $(EXECENV_LDLIBS)
 
@@ -240,16 +251,15 @@ build: _postbuild
 
 exe2cmd = $(strip $(call dotfile,$(patsubst %,%.cmd,$(1))))
 
-ifeq ($(RTE_BUILD_COMBINE_LIBS),y)
+ifeq ($(CONFIG_RTE_BUILD_COMBINE_LIBS),y)
 LDLIBS += -l$(RTE_LIBNAME)
 endif
 
 ifeq ($(LINK_USING_CC),1)
-LDLIBS := $(call linkerprefix,$(LDLIBS))
-LDFLAGS := $(call linkerprefix,$(LDFLAGS))
 override EXTRA_LDFLAGS := $(call linkerprefix,$(EXTRA_LDFLAGS))
 O_TO_EXE = $(CC) $(CFLAGS) $(LDFLAGS_$(@)) \
-	-Wl,-Map=$(@).map,--cref -o $@ $(OBJS-y) $(LDFLAGS) $(EXTRA_LDFLAGS) $(LDLIBS)
+	-Wl,-Map=$(@).map,--cref -o $@ $(OBJS-y) $(call linkerprefix,$(LDFLAGS)) \
+	$(EXTRA_LDFLAGS) $(call linkerprefix,$(LDLIBS))
 else
 O_TO_EXE = $(LD) $(LDFLAGS) $(LDFLAGS_$(@)) $(EXTRA_LDFLAGS) \
 	-Map=$(@).map --cref -o $@ $(OBJS-y) $(LDLIBS)

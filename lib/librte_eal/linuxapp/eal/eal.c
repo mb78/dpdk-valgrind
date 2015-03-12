@@ -50,7 +50,9 @@
 #include <errno.h>
 #include <sys/mman.h>
 #include <sys/queue.h>
+#if defined(RTE_ARCH_X86_64) || defined(RTE_ARCH_I686)
 #include <sys/io.h>
+#endif
 
 #include <rte_common.h>
 #include <rte_debug.h>
@@ -284,7 +286,7 @@ rte_eal_config_reattach(void)
 }
 
 /* Detect if we are a primary or a secondary process */
-static enum rte_proc_type_t
+enum rte_proc_type_t
 eal_proc_type_detect(void)
 {
 	enum rte_proc_type_t ptype = RTE_PROC_PRIMARY;
@@ -307,9 +309,7 @@ eal_proc_type_detect(void)
 static void
 rte_config_init(void)
 {
-	rte_config.process_type = (internal_config.process_type == RTE_PROC_AUTO) ?
-			eal_proc_type_detect() : /* for auto, detect the type */
-			internal_config.process_type; /* otherwise use what's already set */
+	rte_config.process_type = internal_config.process_type;
 
 	switch (rte_config.process_type){
 	case RTE_PROC_PRIMARY:
@@ -448,14 +448,17 @@ eal_parse_base_virtaddr(const char *arg)
 		return -1;
 
 	/* make sure we don't exceed 32-bit boundary on 32-bit target */
-#ifndef RTE_ARCH_X86_64
+#ifndef RTE_ARCH_64
 	if (addr >= UINTPTR_MAX)
 		return -1;
 #endif
 
-	/* align the addr on 2M boundary */
-	internal_config.base_virtaddr = RTE_PTR_ALIGN_CEIL((uintptr_t)addr,
-	                                                   RTE_PGSIZE_2M);
+	/* align the addr on 16M boundary, 16MB is the minimum huge page
+	 * size on IBM Power architecture. If the addr is aligned to 16MB,
+	 * it can align to 2MB for x86. So this alignment can also be used
+	 * on x86 */
+	internal_config.base_virtaddr =
+		RTE_PTR_ALIGN_CEIL((uintptr_t)addr, (size_t)RTE_PGSIZE_16M);
 
 	return 0;
 }
@@ -504,42 +507,15 @@ eal_get_hugepage_mem_size(void)
 static int
 eal_parse_args(int argc, char **argv)
 {
-	int opt, ret, i;
+	int opt, ret;
 	char **argvopt;
 	int option_index;
-	int coremask_ok = 0;
 	char *prgname = argv[0];
 	struct shared_driver *solib;
 
 	argvopt = argv;
 
-	internal_config.memory = 0;
-	internal_config.force_nrank = 0;
-	internal_config.force_nchannel = 0;
-	internal_config.hugefile_prefix = HUGEFILE_PREFIX_DEFAULT;
-	internal_config.hugepage_dir = NULL;
-	internal_config.force_sockets = 0;
-	internal_config.syslog_facility = LOG_DAEMON;
-	/* default value from build option */
-	internal_config.log_level = RTE_LOG_LEVEL;
-	internal_config.xen_dom0_support = 0;
-	/* if set to NONE, interrupt mode is determined automatically */
-	internal_config.vfio_intr_mode = RTE_INTR_MODE_NONE;
-#ifdef RTE_LIBEAL_USE_HPET
-	internal_config.no_hpet = 0;
-#else
-	internal_config.no_hpet = 1;
-#endif
-	/* zero out the NUMA config */
-	for (i = 0; i < RTE_MAX_NUMA_NODES; i++)
-		internal_config.socket_mem[i] = 0;
-
-	/* zero out hugedir descriptors */
-	for (i = 0; i < MAX_HUGEPAGE_SIZES; i++)
-		internal_config.hugepage_info[i].lock_descriptor = -1;
-
-	internal_config.vmware_tsc_map = 0;
-	internal_config.base_virtaddr = 0;
+	eal_reset_internal_config(&internal_config);
 
 	while ((opt = getopt_long(argc, argvopt, eal_short_options,
 				  eal_long_options, &option_index)) != EOF) {
@@ -557,13 +533,8 @@ eal_parse_args(int argc, char **argv)
 			return -1;
 		}
 		/* common parser handled this option */
-		if (ret == 0) {
-			/* special case, note that the common parser accepted
-			 * the coremask option */
-			if (opt == 'c')
-				coremask_ok = 1;
+		if (ret == 0)
 			continue;
-		}
 
 		switch (opt) {
 		/* force loading of external driver */
@@ -648,70 +619,25 @@ eal_parse_args(int argc, char **argv)
 		}
 	}
 
+	if (eal_adjust_config(&internal_config) != 0)
+		return -1;
+
 	/* sanity checks */
-	if (!coremask_ok) {
-		RTE_LOG(ERR, EAL, "coremask not specified\n");
-		eal_usage(prgname);
-		return -1;
-	}
-	if (internal_config.process_type == RTE_PROC_AUTO){
-		internal_config.process_type = eal_proc_type_detect();
-	}
-	if (internal_config.process_type == RTE_PROC_INVALID){
-		RTE_LOG(ERR, EAL, "Invalid process type specified\n");
-		eal_usage(prgname);
-		return -1;
-	}
-	if (internal_config.process_type == RTE_PROC_PRIMARY &&
-			internal_config.force_nchannel == 0) {
-		RTE_LOG(ERR, EAL, "Number of memory channels (-n) not specified\n");
-		eal_usage(prgname);
-		return -1;
-	}
-	if (index(internal_config.hugefile_prefix,'%') != NULL){
-		RTE_LOG(ERR, EAL, "Invalid char, '%%', in '"OPT_FILE_PREFIX"' option\n");
-		eal_usage(prgname);
-		return -1;
-	}
-	if (internal_config.memory > 0 && internal_config.force_sockets == 1) {
-		RTE_LOG(ERR, EAL, "Options -m and --socket-mem cannot be specified "
-				"at the same time\n");
-		eal_usage(prgname);
-		return -1;
-	}
-	/* --no-huge doesn't make sense with either -m or --socket-mem */
-	if (internal_config.no_hugetlbfs &&
-			(internal_config.memory > 0 ||
-					internal_config.force_sockets == 1)) {
-		RTE_LOG(ERR, EAL, "Options -m or --socket-mem cannot be specified "
-				"together with --no-huge!\n");
-		eal_usage(prgname);
-		return -1;
-	}
-	/* --xen-dom0 doesn't make sense with --socket-mem */
-	if (internal_config.xen_dom0_support && internal_config.force_sockets == 1) {
-		RTE_LOG(ERR, EAL, "Options --socket-mem cannot be specified "
-					"together with --xen_dom0!\n");
+	if (eal_check_common_options(&internal_config) != 0) {
 		eal_usage(prgname);
 		return -1;
 	}
 
-	if (rte_eal_devargs_type_count(RTE_DEVTYPE_WHITELISTED_PCI) != 0 &&
-		rte_eal_devargs_type_count(RTE_DEVTYPE_BLACKLISTED_PCI) != 0) {
-		RTE_LOG(ERR, EAL, "Error: blacklist [-b] and whitelist "
-			"[-w] options cannot be used at the same time\n");
+	/* --xen-dom0 doesn't make sense with --socket-mem */
+	if (internal_config.xen_dom0_support && internal_config.force_sockets == 1) {
+		RTE_LOG(ERR, EAL, "Options --"OPT_SOCKET_MEM" cannot be specified "
+			"together with --"OPT_XEN_DOM0"\n");
 		eal_usage(prgname);
 		return -1;
 	}
 
 	if (optind >= 0)
 		argv[optind-1] = prgname;
-
-	/* if no memory amounts were requested, this will result in 0 and
-	 * will be overriden later, right after eal_hugepage_info_init() */
-	for (i = 0; i < RTE_MAX_NUMA_NODES; i++)
-		internal_config.memory += internal_config.socket_mem[i];
-
 	ret = optind-1;
 	optind = 0; /* reset getopt lib */
 	return ret;
@@ -752,13 +678,19 @@ rte_eal_mcfg_complete(void)
 
 /*
  * Request iopl privilege for all RPL, returns 0 on success
+ * iopl() call is mostly for the i386 architecture. For other architectures,
+ * return -1 to indicate IO privilege can't be changed in this way.
  */
 int
 rte_eal_iopl_init(void)
 {
+#if defined(RTE_ARCH_X86_64) || defined(RTE_ARCH_I686)
 	if (iopl(3) != 0)
 		return -1;
 	return 0;
+#else
+	return -1;
+#endif
 }
 
 /* Launch threads, called at application init(). */

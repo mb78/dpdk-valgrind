@@ -53,7 +53,7 @@
 
 #include "main.h"
 
-#define MAX_QUEUES 128
+#define MAX_QUEUES 512
 
 /* the maximum number of external ports supported */
 #define MAX_SUP_PORTS 1
@@ -78,25 +78,6 @@
 #define MBUF_SIZE_ZCP (VIRTIO_DESCRIPTOR_LEN_ZCP + sizeof(struct rte_mbuf) \
 	+ RTE_PKTMBUF_HEADROOM)
 #define MBUF_CACHE_SIZE_ZCP 0
-
-/*
- * RX and TX Prefetch, Host, and Write-back threshold values should be
- * carefully set for optimal performance. Consult the network
- * controller's datasheet and supporting DPDK documentation for guidance
- * on how these parameters should be set.
- */
-#define RX_PTHRESH 8 /* Default values of RX prefetch threshold reg. */
-#define RX_HTHRESH 8 /* Default values of RX host threshold reg. */
-#define RX_WTHRESH 4 /* Default values of RX write-back threshold reg. */
-
-/*
- * These default values are optimized for use with the Intel(R) 82599 10 GbE
- * Controller and the DPDK ixgbe PMD. Consider using other values for other
- * network controllers and/or network drivers.
- */
-#define TX_PTHRESH 36 /* Default values of TX prefetch threshold reg. */
-#define TX_HTHRESH 0  /* Default values of TX host threshold reg. */
-#define TX_WTHRESH 0  /* Default values of TX write-back threshold reg. */
 
 #define MAX_PKT_BURST 32 		/* Max burst size for RX/TX */
 #define BURST_TX_DRAIN_US 100 	/* TX drain every ~100us */
@@ -156,7 +137,7 @@
 #define MAC_ADDR_CMP 0xFFFFFFFFFFFFULL
 
 /* Number of descriptors per cacheline. */
-#define DESC_PER_CACHELINE (CACHE_LINE_SIZE / sizeof(struct vring_desc))
+#define DESC_PER_CACHELINE (RTE_CACHE_LINE_SIZE / sizeof(struct vring_desc))
 
 /* mask of enabled ports */
 static uint32_t enabled_port_mask = 0;
@@ -220,32 +201,6 @@ static uint32_t burst_rx_retry_num = BURST_RX_RETRIES;
 /* Character device basename. Can be set by user. */
 static char dev_basename[MAX_BASENAME_SZ] = "vhost-net";
 
-
-/* Default configuration for rx and tx thresholds etc. */
-static struct rte_eth_rxconf rx_conf_default = {
-	.rx_thresh = {
-		.pthresh = RX_PTHRESH,
-		.hthresh = RX_HTHRESH,
-		.wthresh = RX_WTHRESH,
-	},
-	.rx_drop_en = 1,
-};
-
-/*
- * These default values are optimized for use with the Intel(R) 82599 10 GbE
- * Controller and the DPDK ixgbe/igb PMD. Consider using other values for other
- * network controllers and/or network drivers.
- */
-static struct rte_eth_txconf tx_conf_default = {
-	.tx_thresh = {
-		.pthresh = TX_PTHRESH,
-		.hthresh = TX_HTHRESH,
-		.wthresh = TX_WTHRESH,
-	},
-	.tx_free_thresh = 0, /* Use PMD default values */
-	.tx_rs_thresh = 0, /* Use PMD default values */
-};
-
 /* empty vmdq configuration structure. Filled in programatically */
 static struct rte_eth_conf vmdq_conf_default = {
 	.rxmode = {
@@ -285,6 +240,9 @@ static struct rte_eth_conf vmdq_conf_default = {
 static unsigned lcore_ids[RTE_MAX_LCORE];
 static uint8_t ports[RTE_MAX_ETHPORTS];
 static unsigned num_ports = 0; /**< The number of ports specified in command line */
+static uint16_t num_pf_queues, num_vmdq_queues;
+static uint16_t vmdq_pool_base, vmdq_queue_base;
+static uint16_t queues_per_pool;
 
 static const uint16_t external_pkt_default_vlan_tag = 2000;
 const uint16_t vlan_tags[] = {
@@ -412,7 +370,9 @@ port_init(uint8_t port)
 {
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_conf port_conf;
-	uint16_t rx_rings, tx_rings;
+	struct rte_eth_rxconf *rxconf;
+	struct rte_eth_txconf *txconf;
+	int16_t rx_rings, tx_rings;
 	uint16_t rx_ring_size, tx_ring_size;
 	int retval;
 	uint16_t q;
@@ -420,9 +380,32 @@ port_init(uint8_t port)
 	/* The max pool number from dev_info will be used to validate the pool number specified in cmd line */
 	rte_eth_dev_info_get (port, &dev_info);
 
+	if (dev_info.max_rx_queues > MAX_QUEUES) {
+		rte_exit(EXIT_FAILURE,
+			"please define MAX_QUEUES no less than %u in %s\n",
+			dev_info.max_rx_queues, __FILE__);
+	}
+
+	rxconf = &dev_info.default_rxconf;
+	txconf = &dev_info.default_txconf;
+	rxconf->rx_drop_en = 1;
+
+	/* Enable vlan offload */
+	txconf->txq_flags &= ~ETH_TXQ_FLAGS_NOVLANOFFL;
+
+	/*
+	 * Zero copy defers queue RX/TX start to the time when guest
+	 * finishes its startup and packet buffers from that guest are
+	 * available.
+	 */
+	if (zero_copy) {
+		rxconf->rx_deferred_start = 1;
+		rxconf->rx_drop_en = 0;
+		txconf->tx_deferred_start = 1;
+	}
+
 	/*configure the number of supported virtio devices based on VMDQ limits */
 	num_devices = dev_info.max_vmdq_pools;
-	num_queues = dev_info.max_rx_queues;
 
 	if (zero_copy) {
 		rx_ring_size = num_rx_descriptor;
@@ -442,10 +425,19 @@ port_init(uint8_t port)
 	retval = get_eth_conf(&port_conf, num_devices);
 	if (retval < 0)
 		return retval;
+	/* NIC queues are divided into pf queues and vmdq queues.  */
+	num_pf_queues = dev_info.max_rx_queues - dev_info.vmdq_queue_num;
+	queues_per_pool = dev_info.vmdq_queue_num / dev_info.max_vmdq_pools;
+	num_vmdq_queues = num_devices * queues_per_pool;
+	num_queues = num_pf_queues + num_vmdq_queues;
+	vmdq_queue_base = dev_info.vmdq_queue_base;
+	vmdq_pool_base  = dev_info.vmdq_pool_base;
+	printf("pf queue num: %u, configured vmdq pool num: %u, each vmdq pool has %u queues\n",
+		num_pf_queues, num_devices, queues_per_pool);
 
 	if (port >= rte_eth_dev_count()) return -1;
 
-	rx_rings = (uint16_t)num_queues,
+	rx_rings = (uint16_t)dev_info.max_rx_queues;
 	/* Configure ethernet device. */
 	retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
 	if (retval != 0)
@@ -454,14 +446,16 @@ port_init(uint8_t port)
 	/* Setup the queues. */
 	for (q = 0; q < rx_rings; q ++) {
 		retval = rte_eth_rx_queue_setup(port, q, rx_ring_size,
-						rte_eth_dev_socket_id(port), &rx_conf_default,
+						rte_eth_dev_socket_id(port),
+						rxconf,
 						vpool_array[q].pool);
 		if (retval < 0)
 			return retval;
 	}
 	for (q = 0; q < tx_rings; q ++) {
 		retval = rte_eth_tx_queue_setup(port, q, tx_ring_size,
-						rte_eth_dev_socket_id(port), &tx_conf_default);
+						rte_eth_dev_socket_id(port),
+						txconf);
 		if (retval < 0)
 			return retval;
 	}
@@ -949,7 +943,8 @@ link_vmdq(struct vhost_dev *vdev, struct rte_mbuf *m)
 		vdev->vlan_tag);
 
 	/* Register the MAC address. */
-	ret = rte_eth_dev_mac_addr_add(ports[0], &vdev->mac_address, (uint32_t)dev->device_fh);
+	ret = rte_eth_dev_mac_addr_add(ports[0], &vdev->mac_address,
+				(uint32_t)dev->device_fh + vmdq_pool_base);
 	if (ret)
 		RTE_LOG(ERR, VHOST_DATA, "(%"PRIu64") Failed to add device MAC address to VMDQ\n",
 					dev->device_fh);
@@ -1127,9 +1122,8 @@ virtio_tx_route(struct vhost_dev *vdev, struct rte_mbuf *m, uint16_t vlan_tag)
 		return;
 	}
 
-	if (vm2vm_mode == VM2VM_HARDWARE) {
-		if (find_local_dest(dev, m, &offset, &vlan_tag) != 0 ||
-			offset > rte_pktmbuf_tailroom(m)) {
+	if (unlikely(vm2vm_mode == VM2VM_HARDWARE)) {
+		if (unlikely(find_local_dest(dev, m, &offset, &vlan_tag) != 0)) {
 			rte_pktmbuf_free(m);
 			return;
 		}
@@ -1143,8 +1137,24 @@ virtio_tx_route(struct vhost_dev *vdev, struct rte_mbuf *m, uint16_t vlan_tag)
 
 	m->ol_flags = PKT_TX_VLAN_PKT;
 
-	m->data_len += offset;
-	m->pkt_len += offset;
+	/*
+	 * Find the right seg to adjust the data len when offset is
+	 * bigger than tail room size.
+	 */
+	if (unlikely(vm2vm_mode == VM2VM_HARDWARE)) {
+		if (likely(offset <= rte_pktmbuf_tailroom(m)))
+			m->data_len += offset;
+		else {
+			struct rte_mbuf *seg = m;
+
+			while ((seg->next != NULL) &&
+				(offset > rte_pktmbuf_tailroom(seg)))
+				seg = seg->next;
+
+			seg->data_len += offset;
+		}
+		m->pkt_len += offset;
+	}
 
 	m->vlan_tci = vlan_tag;
 
@@ -2562,7 +2572,7 @@ new_device (struct virtio_net *dev)
 	struct vhost_dev *vdev;
 	uint32_t regionidx;
 
-	vdev = rte_zmalloc("vhost device", sizeof(*vdev), CACHE_LINE_SIZE);
+	vdev = rte_zmalloc("vhost device", sizeof(*vdev), RTE_CACHE_LINE_SIZE);
 	if (vdev == NULL) {
 		RTE_LOG(INFO, VHOST_DATA, "(%"PRIu64") Couldn't allocate memory for vhost dev\n",
 			dev->device_fh);
@@ -2584,7 +2594,7 @@ new_device (struct virtio_net *dev)
 
 		vdev->regions_hpa = (struct virtio_memory_regions_hpa *) rte_zmalloc("vhost hpa region",
 			sizeof(struct virtio_memory_regions_hpa) * vdev->nregions_hpa,
-			CACHE_LINE_SIZE);
+			RTE_CACHE_LINE_SIZE);
 		if (vdev->regions_hpa == NULL) {
 			RTE_LOG(ERR, VHOST_CONFIG, "Cannot allocate memory for hpa region\n");
 			rte_free(vdev);
@@ -2620,7 +2630,7 @@ new_device (struct virtio_net *dev)
 	ll_dev->vdev = vdev;
 	add_data_ll_entry(&ll_root_used, ll_dev);
 	vdev->vmdq_rx_q
-		= dev->device_fh * (num_queues / num_devices);
+		= dev->device_fh * queues_per_pool + vmdq_queue_base;
 
 	if (zero_copy) {
 		uint32_t index = vdev->vmdq_rx_q;
@@ -2849,13 +2859,14 @@ setup_mempool_tbl(int socket, uint32_t index, char *pool_name,
  * device is also registered here to handle the IOCTLs.
  */
 int
-MAIN(int argc, char *argv[])
+main(int argc, char *argv[])
 {
 	struct rte_mempool *mbuf_pool = NULL;
 	unsigned lcore_id, core_id = 0;
 	unsigned nb_ports, valid_num_ports;
 	int ret;
-	uint8_t portid, queue_id = 0;
+	uint8_t portid;
+	uint16_t queue_id;
 	static pthread_t tid;
 
 	/* init EAL */
@@ -2925,14 +2936,6 @@ MAIN(int argc, char *argv[])
 		char pool_name[RTE_MEMPOOL_NAMESIZE];
 		char ring_name[RTE_MEMPOOL_NAMESIZE];
 
-		/*
-		 * Zero copy defers queue RX/TX start to the time when guest
-		 * finishes its startup and packet buffers from that guest are
-		 * available.
-		 */
-		rx_conf_default.rx_deferred_start = (uint8_t)zero_copy;
-		rx_conf_default.rx_drop_en = 0;
-		tx_conf_default.tx_deferred_start = (uint8_t)zero_copy;
 		nb_mbuf = num_rx_descriptor
 			+ num_switching_cores * MBUF_CACHE_SIZE_ZCP
 			+ num_switching_cores * MAX_PKT_BURST;
@@ -3020,10 +3023,10 @@ MAIN(int argc, char *argv[])
 			}
 
 			LOG_DEBUG(VHOST_CONFIG,
-				"in MAIN: mbuf count in mempool at initial "
+				"in main: mbuf count in mempool at initial "
 				"is: %d\n", count_in_mempool);
 			LOG_DEBUG(VHOST_CONFIG,
-				"in MAIN: mbuf count in  ring at initial  is :"
+				"in main: mbuf count in  ring at initial  is :"
 				" %d\n",
 				rte_ring_count(vpool_array[index].ring));
 		}

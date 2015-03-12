@@ -443,9 +443,15 @@ struct rte_eth_rss_conf {
 		ETH_RSS_FRAG_IPV6 | \
 		ETH_RSS_L2_PAYLOAD)
 
-/* Definitions used for redirection table entry size */
-#define ETH_RSS_RETA_NUM_ENTRIES 128
-#define ETH_RSS_RETA_MAX_QUEUE   16
+/*
+ * Definitions used for redirection table entry size.
+ * Some RSS RETA sizes may not be supported by some drivers, check the
+ * documentation or the description of relevant functions for more details.
+ */
+#define ETH_RSS_RETA_SIZE_64  64
+#define ETH_RSS_RETA_SIZE_128 128
+#define ETH_RSS_RETA_SIZE_512 512
+#define RTE_RETA_GROUP_SIZE   64
 
 /* Definitions used for VMDQ and DCB functionality */
 #define ETH_VMDQ_MAX_VLAN_FILTERS   64 /**< Maximum nb. of VMDQ vlan filters. */
@@ -509,15 +515,16 @@ struct rte_eth_vmdq_mirror_conf {
 };
 
 /**
- * A structure used to configure Redirection Table of  the Receive Side
- * Scaling (RSS) feature of an Ethernet port.
+ * A structure used to configure 64 entries of Redirection Table of the
+ * Receive Side Scaling (RSS) feature of an Ethernet port. To configure
+ * more than 64 entries supported by hardware, an array of this structure
+ * is needed.
  */
-struct rte_eth_rss_reta {
-	/** First 64 mask bits indicate which entry(s) need to updated/queried. */
-	uint64_t mask_lo;
-	/** Second 64 mask bits indicate which entry(s) need to updated/queried. */
-	uint64_t mask_hi;
-	uint8_t reta[ETH_RSS_RETA_NUM_ENTRIES];  /**< 128 RETA entries*/
+struct rte_eth_rss_reta_entry64 {
+	uint64_t mask;
+	/**< Mask bits indicate which entries need to be updated/queried. */
+	uint8_t reta[RTE_RETA_GROUP_SIZE];
+	/**< Group of 64 redirection table entries. */
 };
 
 /**
@@ -683,15 +690,6 @@ struct rte_eth_pfc_conf {
 };
 
 /**
- *  Flow Director setting modes: none (default), signature or perfect.
- */
-enum rte_fdir_mode {
-	RTE_FDIR_MODE_NONE      = 0, /**< Disable FDIR support. */
-	RTE_FDIR_MODE_SIGNATURE,     /**< Enable FDIR signature filter mode. */
-	RTE_FDIR_MODE_PERFECT,       /**< Enable FDIR perfect filter mode. */
-};
-
-/**
  *  Memory space that can be configured to store Flow Director filters
  *  in the board memory.
  */
@@ -724,6 +722,8 @@ struct rte_fdir_conf {
 	uint8_t flexbytes_offset;
 	/** RX queue of packets matching a "drop" filter in perfect mode. */
 	uint8_t drop_queue;
+	struct rte_eth_fdir_flex_conf flex_conf;
+	/**< Flex payload configuration. */
 };
 
 /**
@@ -933,6 +933,8 @@ struct rte_eth_dev_info {
 	uint16_t max_vmdq_pools; /**< Maximum number of VMDq pools. */
 	uint32_t rx_offload_capa; /**< Device RX offload capabilities. */
 	uint32_t tx_offload_capa; /**< Device TX offload capabilities. */
+	uint16_t reta_size;
+	/**< Device redirection table size, the total number of entries. */
 	struct rte_eth_rxconf default_rxconf; /**< Default RX configuration */
 	struct rte_eth_txconf default_txconf; /**< Default TX configuration */
 	uint16_t vmdq_queue_base; /**< First queue ID for VMDQ pools. */
@@ -1212,11 +1214,13 @@ typedef int (*priority_flow_ctrl_set_t)(struct rte_eth_dev *dev,
 /**< @internal Setup priority flow control parameter on an Ethernet device */
 
 typedef int (*reta_update_t)(struct rte_eth_dev *dev,
-				struct rte_eth_rss_reta *reta_conf);
+			     struct rte_eth_rss_reta_entry64 *reta_conf,
+			     uint16_t reta_size);
 /**< @internal Update RSS redirection table on an Ethernet device */
 
 typedef int (*reta_query_t)(struct rte_eth_dev *dev,
-				struct rte_eth_rss_reta *reta_conf);
+			    struct rte_eth_rss_reta_entry64 *reta_conf,
+			    uint16_t reta_size);
 /**< @internal Query RSS redirection table on an Ethernet device */
 
 typedef int (*rss_hash_update_t)(struct rte_eth_dev *dev,
@@ -1665,8 +1669,7 @@ struct eth_driver;
  *
  *   - *dev_private*: Holds a pointer to the device private data structure.
  *
- *   - *max_frame_size*: Contains the default Ethernet maximum frame length
- *     (1518).
+ *   - *mtu*: Contains the default Ethernet maximum frame length (1500).
  *
  *   - *port_id*: Contains the port index of the device (actually the index
  *     of the *eth_dev* structure in the *rte_eth_devices* array).
@@ -2952,14 +2955,18 @@ int rte_eth_dev_mac_addr_remove(uint8_t port, struct ether_addr *mac_addr);
  * @param port
  *   The port identifier of the Ethernet device.
  * @param reta_conf
- *    RETA to update.
+ *   RETA to update.
+ * @param reta_size
+ *   Redirection table size. The table size can be queried by
+ *   rte_eth_dev_info_get().
  * @return
  *   - (0) if successful.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
 int rte_eth_dev_rss_reta_update(uint8_t port,
-			struct rte_eth_rss_reta *reta_conf);
+				struct rte_eth_rss_reta_entry64 *reta_conf,
+				uint16_t reta_size);
 
  /**
  * Query Redirection Table(RETA) of Receive Side Scaling of Ethernet device.
@@ -2968,13 +2975,17 @@ int rte_eth_dev_rss_reta_update(uint8_t port,
  *   The port identifier of the Ethernet device.
  * @param reta_conf
  *   RETA to query.
+ * @param reta_size
+ *   Redirection table size. The table size can be queried by
+ *   rte_eth_dev_info_get().
  * @return
  *   - (0) if successful.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
 int rte_eth_dev_rss_reta_query(uint8_t port,
-			struct rte_eth_rss_reta *reta_conf);
+			       struct rte_eth_rss_reta_entry64 *reta_conf,
+			       uint16_t reta_size);
 
  /**
  * Updates unicast hash table for receiving packet with the given destination
@@ -3351,7 +3362,7 @@ int rte_eth_dev_bypass_wd_reset(uint8_t port);
  /**
  * Configuration of Receive Side Scaling hash computation of Ethernet device.
  *
- * @param port
+ * @param port_id
  *   The port identifier of the Ethernet device.
  * @param rss_conf
  *   The new configuration to use for RSS hash computation on the port.
@@ -3368,7 +3379,7 @@ int rte_eth_dev_rss_hash_update(uint8_t port_id,
  * Retrieve current configuration of Receive Side Scaling hash computation
  * of Ethernet device.
  *
- * @param port
+ * @param port_id
  *   The port identifier of the Ethernet device.
  * @param rss_conf
  *   Where to store the current RSS hash configuration of the Ethernet device.

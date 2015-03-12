@@ -38,6 +38,7 @@ RTE_TARGET ?= x86_64-native-linuxapp-gcc
 include $(RTE_SDK)/mk/rte.vars.mk
 
 DIRS-y += cmdline
+DIRS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += distributor
 ifneq ($(ICP_ROOT),)
 DIRS-y += dpdk_qat
 endif
@@ -61,10 +62,12 @@ DIRS-y += netmap_compat/bridge
 DIRS-$(CONFIG_RTE_LIBRTE_METER) += qos_meter
 DIRS-$(CONFIG_RTE_LIBRTE_SCHED) += qos_sched
 DIRS-y += quota_watermark
+DIRS-y += skeleton
 DIRS-y += timer
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost
 DIRS-$(CONFIG_RTE_LIBRTE_XEN_DOM0) += vhost_xen
 DIRS-y += vmdq
 DIRS-y += vmdq_dcb
+DIRS-y += vm_power_manager
 
 include $(RTE_SDK)/mk/rte.extsubdir.mk

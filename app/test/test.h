@@ -44,7 +44,7 @@
 		}														\
 } while (0)
 
-#define TEST_ASSERT_EQUAL(a, b, msg, ...)  {					\
+#define TEST_ASSERT_EQUAL(a, b, msg, ...) do {					\
 		if (!(a == b)) {										\
 			printf("TestCase %s() line %d failed: "				\
 				msg "\n", __func__, __LINE__, ##__VA_ARGS__);	\
@@ -62,14 +62,15 @@
 
 #define TEST_ASSERT_SUCCESS(val, msg, ...) do {					\
 		if (!(val == 0)) {										\
-			printf("TestCase %s() line %d failed: "			\
-				msg "\n", __func__, __LINE__, ##__VA_ARGS__);	\
+			printf("TestCase %s() line %d failed (err %d): "	\
+				msg "\n", __func__, __LINE__, val,				\
+				##__VA_ARGS__);									\
 			return -1;											\
 		}														\
 } while (0)
 
 #define TEST_ASSERT_FAIL(val, msg, ...) do {					\
-		if (!(val != -1)) {										\
+		if (!(val != 0)) {										\
 			printf("TestCase %s() line %d failed: "			\
 				msg "\n", __func__, __LINE__, ##__VA_ARGS__);	\
 			return -1;											\
@@ -118,11 +119,6 @@ struct unit_test_suite {
 
 int unit_test_suite_runner(struct unit_test_suite *suite);
 
-/* icc on baremetal gives us troubles with function named 'main' */
-#ifdef RTE_EXEC_ENV_BAREMETAL
-#define main _main
-#endif
-
 #define RECURSIVE_ENV_VAR "RTE_TEST_RECURSIVE"
 
 #include <cmdline_parse.h>
@@ -131,8 +127,6 @@ int unit_test_suite_runner(struct unit_test_suite *suite);
 extern const char *prgname;
 
 int commands_init(void);
-
-int main(int argc, char **argv);
 
 int test_pci(void);
 int test_pci_run;

@@ -31,50 +31,54 @@
 System Requirements
 ===================
 
-This chapter describes the packages required to compile the Intel® DPDK.
+This chapter describes the packages required to compile the DPDK.
 
 .. note::
 
-    If the Intel® DPDK is being used on an Intel® Communications Chipset 89xx Series platform,
+    If the DPDK is being used on an Intel® Communications Chipset 89xx Series platform,
     please consult the *Intel® Communications Chipset 89xx Series Software for Linux* Getting Started Guide*.
 
-BIOS Setting Prerequisite
--------------------------
+BIOS Setting Prerequisite on x86
+--------------------------------
 
-For the majority of platforms, no special BIOS settings are needed to use basic Intel® DPDK functionality.
+For the majority of platforms, no special BIOS settings are needed to use basic DPDK functionality.
 However, for additional HPET timer and power management functionality,
 and high performance of small packets on 40G NIC, BIOS setting changes may be needed.
 Consult :ref:`Chapter 5. Enabling Additional Functionality <Enabling_Additional_Functionality>`
 for more information on the required changes.
 
-Compilation of the Intel® DPDK
-------------------------------
+Compilation of the DPDK
+-----------------------
 
 **Required Tools:**
 
 .. note::
 
     Testing has been performed using Fedora* 18. The setup commands and installed packages needed on other systems may be different.
-    For details on other Linux distributions and the versions tested, please consult the Intel® DPDK Release Notes.
+    For details on other Linux distributions and the versions tested, please consult the DPDK Release Notes.
 
 *   GNU  make
 
 *   coreutils:  cmp, sed, grep, arch
 
-*   gcc: versions 4.5.x or later is recommended.
-    On some distributions, some specific compiler flags and linker flags are enabled by default and
-    affect performance (- fstack-protector, for example).
-    Please refer to the documentation of your distribution and to gcc -dumpspecs.
+*   gcc: versions 4.5.x or later is recommended for i686/x86_64. versions 4.8.x or later is recommanded
+    for ppc_64. On some distributions, some specific compiler flags and linker flags are enabled by
+    default and affect performance (- fstack-protector, for example). Please refer to the documentation
+    of your distribution and to gcc -dumpspecs.
 
-*   libc headers (glibc-devel.i686 / libc6-dev-i386; glibc-devel.x86_64  for 64-bit compilation)
+*   libc headers (glibc-devel.i686 / libc6-dev-i386; glibc-devel.x86_64 for 64-bit compilation on Intel
+    architecture; glibc-devel.ppc64 for 64 bit IBM Power architecture;)
 
-*   Linux kernel headers or sources required to build kernel modules. (kernel- devel.x86_64)
+*   Linux kernel headers or sources required to build kernel modules. (kernel - devel.x86_64;
+    kernel - devel.ppc64)
 
 *   Additional packages required for 32-bit compilation on 64-bit systems are:
 
-    glibc.i686, libgcc.i686, libstdc++.i686 and glibc-devel.i686
+    glibc.i686, libgcc.i686, libstdc++.i686 and glibc-devel.i686 for Intel i686/x86_64;
 
-*   Python, version 2.6 or 2.7, to use various helper scripts included in the Intel® DPDK package
+    glibc.ppc64, libgcc.ppc64, libstdc++.ppc64 and glibc-devel.ppc64 for IBM ppc_64;
+
+*   Python, version 2.6 or 2.7, to use various helper scripts included in the DPDK package
 
 
 **Optional Tools:**
@@ -83,13 +87,17 @@ Compilation of the Intel® DPDK
     See the icc Installation Guide found in the Documentation directory under the compiler installation.
     This release has been tested using version 12.1.
 
+*   IBM® Advance ToolChain for Powerlinux. This is a set of open source development tools and runtime libraries
+    which allows users to take leading edge advantage of IBM's latest POWER hardware features on Linux. To install
+    it, see the IBM official installation document.
+
 *   libpcap headers and libraries (libpcap-devel) to compile and use the libpcap-based poll-mode driver.
     This driver is disabled by default and can be enabled by setting CONFIG_RTE_LIBRTE_PMD_PCAP=y in the build time config file.
 
-Running Intel® DPDK Applications
---------------------------------
+Running DPDK Applications
+-------------------------
 
-To run an Intel® DPDK application, some customization may be required on the target machine.
+To run an DPDK application, some customization may be required on the target machine.
 
 System Software
 ~~~~~~~~~~~~~~~
@@ -104,8 +112,8 @@ System Software
 
         uname -r
 
-For details of the patches needed to use the Intel® DPDK with earlier kernel versions,
-see the Intel® DPDK FAQ included in the *Intel® DPDK Release Notes*.
+For details of the patches needed to use the DPDK with earlier kernel versions,
+see the DPDK FAQ included in the *DPDK Release Notes*.
 Note also that Redhat* Linux* 6.2 and 6.3 uses a 2.6.32 kernel that already has all the necessary patches applied.
 
 *   glibc >= 2.7 (for features related to cpuset)
@@ -125,9 +133,9 @@ Note also that Redhat* Linux* 6.2 and 6.3 uses a 2.6.32 kernel that already has 
 *   Kernel configuration
 
     In the Fedora* OS and other common distributions, such as Ubuntu*, or RedHat Enterprise Linux*,
-    the vendor supplied kernel configurations can be used to run most Intel® DPDK applications.
+    the vendor supplied kernel configurations can be used to run most DPDK applications.
 
-    For other kernel builds, options which should be enabled for Intel® DPDK include:
+    For other kernel builds, options which should be enabled for DPDK include:
 
     *   UIO support
 
@@ -148,8 +156,8 @@ and therefore less Translation Lookaside Buffers (TLBs, high speed translation c
 which reduce the time it takes to translate a virtual page address to a physical page address.
 Without hugepages, high TLB miss rates would occur with the standard 4k page size, slowing performance.
 
-Reserving Hugepages for Intel® DPDK Use
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Reserving Hugepages for DPDK Use
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The allocation of hugepages should be done at boot time or as soon as possible after system boot
 to prevent memory from being fragmented in physical memory.
@@ -171,8 +179,9 @@ For example, to reserve 4G of hugepage memory in the form of four 1G pages, the 
 
 .. note::
 
-    The hugepage sizes that a CPU supports can be determined from the CPU flags.
+    The hugepage sizes that a CPU supports can be determined from the CPU flags on Intel architecture.
     If pse exists, 2M hugepages are supported; if pdpe1gb exists, 1G hugepages are supported.
+    On IBM Power architecture, the supported hugepage sizes are 16MB and 16GB.
 
 .. note::
 
@@ -205,10 +214,10 @@ On a NUMA machine, pages should be allocated explicitly on separate nodes:
 
     For 1G pages, it is not possible to reserve the hugepage memory after the system has booted.
 
-Using Hugepages with the Intel® DPDK
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Using Hugepages with the DPDK
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Once the hugepage memory is reserved, to make the memory available for Intel® DPDK use, perform the following steps:
+Once the hugepage memory is reserved, to make the memory available for DPDK use, perform the following steps:
 
 .. code-block:: console
 
@@ -231,26 +240,26 @@ Xen Domain0 Support in the Linux* Environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The existing memory management implementation is based on the Linux* kernel hugepage mechanism.
-On the Xen hypervisor, hugepage support for DomainU (DomU) Guests means that Intel® DPDK applications work as normal for guests.
+On the Xen hypervisor, hugepage support for DomainU (DomU) Guests means that DPDK applications work as normal for guests.
 
 However, Domain0 (Dom0) does not support hugepages.
 To work around this limitation, a new kernel module rte_dom0_mm is added to facilitate the allocation and mapping of memory via
 **IOCTL** (allocation) and **MMAP** (mapping).
 
-Enabling Xen Dom0 Mode in the Intel® DPDK
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Enabling Xen Dom0 Mode in the DPDK
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-By default, Xen Dom0 mode is disabled in the Intel® DPDK build configuration files.
+By default, Xen Dom0 mode is disabled in the DPDK build configuration files.
 To support Xen Dom0, the CONFIG_RTE_LIBRTE_XEN_DOM0 setting should be changed to “y”, which enables the Xen Dom0 mode at compile time.
 
 Furthermore, the CONFIG_RTE_EAL_ALLOW_INV_SOCKET_ID setting should also be changed to “y” in the case of the wrong socket ID being received.
 
-Loading the Intel® DPDK rte_dom0_mm Module
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Loading the DPDK rte_dom0_mm Module
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-To run any Intel® DPDK application on Xen Dom0, the rte_dom0_mm module must be loaded into the running kernel with rsv_memsize option.
-The module is found in the kmod sub-directory of the Intel® DPDK target directory.
-This module should be loaded using the insmod command as shown below (assuming that the current directory is the Intel® DPDK target directory):
+To run any DPDK application on Xen Dom0, the rte_dom0_mm module must be loaded into the running kernel with rsv_memsize option.
+The module is found in the kmod sub-directory of the DPDK target directory.
+This module should be loaded using the insmod command as shown below (assuming that the current directory is the DPDK target directory):
 
 .. code-block:: console
 
@@ -258,8 +267,8 @@ This module should be loaded using the insmod command as shown below (assuming t
 
 The value X cannot be greater than 4096(MB).
 
-Configuring Memory for Intel® DPDK Use
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Configuring Memory for DPDK Use
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 After the rte_dom0_mm.ko kernel module has been loaded, the user must configure the memory size for DPDK usage.
 This is done by echoing the memory size to a memsize file in the /sys/devices/ directory.
@@ -281,7 +290,7 @@ Xen Domain0 does not support NUMA configuration, as a result the --socket-mem co
 
     The memsize value cannot be greater than the rsv_memsize value.
 
-Running the Intel® DPDK Application on Xen Domain0
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Running the DPDK Application on Xen Domain0
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-To run the Intel® DPDK application on Xen Domain0, an extra command line option --xen-dom0 is required.
+To run the DPDK application on Xen Domain0, an extra command line option --xen-dom0 is required.

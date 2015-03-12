@@ -48,6 +48,8 @@ struct virtual_ethdev_private {
 
 	struct rte_mbuf *rx_pkt_burst[MAX_PKT_BURST];
 	int rx_pkt_burst_len;
+
+	int tx_burst_fail_count;
 };
 
 struct virtual_ethdev_queue {
@@ -350,42 +352,67 @@ virtual_ethdev_rx_burst_fail(void *queue __rte_unused,
 }
 
 static uint16_t
-virtual_ethdev_tx_burst_success(void *queue,
-							 struct rte_mbuf **bufs __rte_unused,
-							 uint16_t nb_pkts)
+virtual_ethdev_tx_burst_success(void *queue, struct rte_mbuf **bufs,
+		uint16_t nb_pkts)
 {
+	struct virtual_ethdev_queue *tx_q = (struct virtual_ethdev_queue *)queue;
+
 	struct rte_eth_dev *vrtl_eth_dev;
-	struct virtual_ethdev_queue *tx_q;
 	struct virtual_ethdev_private *dev_private;
+	uint64_t obytes = 0;
 	int i;
 
-	tx_q = (struct virtual_ethdev_queue *)queue;
-
+	for (i = 0; i < nb_pkts; i++)
+		obytes += rte_pktmbuf_pkt_len(bufs[i]);
 	vrtl_eth_dev = &rte_eth_devices[tx_q->port_id];
+	dev_private = vrtl_eth_dev->data->dev_private;
 
 	if (vrtl_eth_dev->data->dev_link.link_status) {
-		dev_private = vrtl_eth_dev->data->dev_private;
+		/* increment opacket count */
 		dev_private->eth_stats.opackets += nb_pkts;
-
-		return nb_pkts;
-	}
-
-	/* free packets in burst */
-	for (i = 0; i < nb_pkts; i++) {
-		if (bufs[i] != NULL)
+		dev_private->eth_stats.obytes += obytes;
+		/* free packets in burst */
+		for (i = 0; i < nb_pkts; i++)
 			rte_pktmbuf_free(bufs[i]);
 
-		bufs[i] = NULL;
+		return nb_pkts;
 	}
 
 	return 0;
 }
 
-
 static uint16_t
-virtual_ethdev_tx_burst_fail(void *queue __rte_unused,
-		struct rte_mbuf **bufs __rte_unused, uint16_t nb_pkts __rte_unused)
+virtual_ethdev_tx_burst_fail(void *queue, struct rte_mbuf **bufs,
+		uint16_t nb_pkts)
 {
+	struct rte_eth_dev *vrtl_eth_dev = NULL;
+	struct virtual_ethdev_queue *tx_q = NULL;
+	struct virtual_ethdev_private *dev_private = NULL;
+
+	int i;
+
+	tx_q = (struct virtual_ethdev_queue *)queue;
+	vrtl_eth_dev = &rte_eth_devices[tx_q->port_id];
+	dev_private = vrtl_eth_dev->data->dev_private;
+
+	if (dev_private->tx_burst_fail_count < nb_pkts) {
+		int successfully_txd = nb_pkts - dev_private->tx_burst_fail_count;
+
+		/* increment opacket count */
+		dev_private->eth_stats.opackets += successfully_txd;
+
+		/* free packets in burst */
+		for (i = 0; i < successfully_txd; i++) {
+			/* free packets in burst */
+			if (bufs[i] != NULL)
+				rte_pktmbuf_free(bufs[i]);
+
+			bufs[i] = NULL;
+		}
+
+		return successfully_txd;
+	}
+
 	return 0;
 }
 
@@ -405,17 +432,42 @@ virtual_ethdev_rx_burst_fn_set_success(uint8_t port_id, uint8_t success)
 void
 virtual_ethdev_tx_burst_fn_set_success(uint8_t port_id, uint8_t success)
 {
+	struct virtual_ethdev_private *dev_private = NULL;
 	struct rte_eth_dev *vrtl_eth_dev = &rte_eth_devices[port_id];
+
+	dev_private = vrtl_eth_dev->data->dev_private;
 
 	if (success)
 		vrtl_eth_dev->tx_pkt_burst = virtual_ethdev_tx_burst_success;
 	else
 		vrtl_eth_dev->tx_pkt_burst = virtual_ethdev_tx_burst_fail;
+
+	dev_private->tx_burst_fail_count = 0;
 }
 
+void
+virtual_ethdev_tx_burst_fn_set_tx_pkt_fail_count(uint8_t port_id,
+		uint8_t packet_fail_count)
+{
+	struct virtual_ethdev_private *dev_private = NULL;
+	struct rte_eth_dev *vrtl_eth_dev = &rte_eth_devices[port_id];
+
+
+	dev_private = vrtl_eth_dev->data->dev_private;
+	dev_private->tx_burst_fail_count = packet_fail_count;
+}
 
 void
-virtual_ethdev_simulate_link_status_interrupt(uint8_t port_id, uint8_t link_status)
+virtual_ethdev_set_link_status(uint8_t port_id, uint8_t link_status)
+{
+	struct rte_eth_dev *vrtl_eth_dev = &rte_eth_devices[port_id];
+
+	vrtl_eth_dev->data->dev_link.link_status = link_status;
+}
+
+void
+virtual_ethdev_simulate_link_status_interrupt(uint8_t port_id,
+		uint8_t link_status)
 {
 	struct rte_eth_dev *vrtl_eth_dev = &rte_eth_devices[port_id];
 
@@ -461,7 +513,7 @@ get_number_of_sockets(void)
 
 int
 virtual_ethdev_create(const char *name, struct ether_addr *mac_addr,
-		uint8_t socket_id)
+		uint8_t socket_id, uint8_t isr_support)
 {
 	struct rte_pci_device *pci_dev = NULL;
 	struct rte_eth_dev *eth_dev = NULL;
@@ -511,7 +563,12 @@ virtual_ethdev_create(const char *name, struct ether_addr *mac_addr,
 	pci_dev->numa_node = socket_id;
 	pci_drv->name = virtual_ethdev_driver_name;
 	pci_drv->id_table = id_table;
-	pci_drv->drv_flags = RTE_PCI_DRV_INTR_LSC;
+
+	if (isr_support)
+		pci_drv->drv_flags |= RTE_PCI_DRV_INTR_LSC;
+	else
+		pci_drv->drv_flags &= ~RTE_PCI_DRV_INTR_LSC;
+
 
 	eth_drv->pci_drv = (struct rte_pci_driver)(*pci_drv);
 	eth_dev->driver = eth_drv;
@@ -531,7 +588,6 @@ virtual_ethdev_create(const char *name, struct ether_addr *mac_addr,
 
 	memcpy(eth_dev->data->mac_addrs, mac_addr,
 			sizeof(*eth_dev->data->mac_addrs));
-	eth_dev->data->mac_addrs->addr_bytes[5] = eth_dev->data->port_id;
 
 	eth_dev->data->dev_started = 0;
 	eth_dev->data->promiscuous = 0;

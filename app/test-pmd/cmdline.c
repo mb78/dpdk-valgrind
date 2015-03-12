@@ -59,6 +59,7 @@
 #include <rte_cycles.h>
 #include <rte_memory.h>
 #include <rte_memzone.h>
+#include <rte_malloc.h>
 #include <rte_launch.h>
 #include <rte_tailq.h>
 #include <rte_eal.h>
@@ -171,7 +172,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			" statistics.\n\n"
 
 			"quit\n"
-			"    Quit to prompt in Linux and reboot on Baremetal.\n\n"
+			"    Quit to prompt.\n\n"
 		);
 	}
 
@@ -185,6 +186,11 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"show port (info|stats|xstats|fdir|stat_qmap) (port_id|all)\n"
 			"    Display information for port_id, or all.\n\n"
+
+			"show port X rss reta (size) (mask0,mask1,...)\n"
+			"    Display the rss redirection table entry indicated"
+			" by masks on port X. size is used to indicate the"
+			" hardware supported reta size\n\n"
 
 			"show port rss-hash [key]\n"
 			"    Display the RSS hash functions and RSS hash key"
@@ -310,18 +316,26 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Disable hardware insertion of a VLAN header in"
 			" packets sent on a port.\n\n"
 
-			"tx_checksum set (mask) (port_id)\n"
-			"    Enable hardware insertion of checksum offload with"
-			" the 8-bit mask, 0~0xff, in packets sent on a port.\n"
-			"        bit 0 - insert ip   checksum offload if set\n"
-			"        bit 1 - insert udp  checksum offload if set\n"
-			"        bit 2 - insert tcp  checksum offload if set\n"
-			"        bit 3 - insert sctp checksum offload if set\n"
-			"        bit 4 - insert inner ip  checksum offload if set\n"
-			"        bit 5 - insert inner udp checksum offload if set\n"
-			"        bit 6 - insert inner tcp checksum offload if set\n"
-			"        bit 7 - insert inner sctp checksum offload if set\n"
+			"tx_cksum set (ip|udp|tcp|sctp|vxlan) (hw|sw) (port_id)\n"
+			"    Select hardware or software calculation of the"
+			" checksum with when transmitting a packet using the"
+			" csum forward engine.\n"
+			"    ip|udp|tcp|sctp always concern the inner layer.\n"
+			"    vxlan concerns the outer IP and UDP layer (in"
+			" case the packet is recognized as a vxlan packet by"
+			" the forward engine)\n"
 			"    Please check the NIC datasheet for HW limits.\n\n"
+
+			"tx_checksum show (port_id)\n"
+			"    Display tx checksum offload configuration\n\n"
+
+			"tso set (segsize) (portid)\n"
+			"    Enable TCP Segmentation Offload in csum forward"
+			" engine.\n"
+			"    Please check the NIC datasheet for HW limits.\n\n"
+
+			"tso show (portid)"
+			"    Display the status of TCP Segmentation Offload.\n\n"
 
 			"set fwd (%s)\n"
 			"    Set packet forwarding mode.\n\n"
@@ -462,7 +476,15 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"set bonding xmit_balance_policy (port_id) (l2|l23|l34)\n"
 			"	Set the transmit balance policy for bonded device running in balance mode.\n\n"
+
+			"set bonding mon_period (port_id) (value)\n"
+			"	Set the bonding link status monitoring polling period in ms.\n\n"
 #endif
+			"set link-up port (port_id)\n"
+			"	Set link up for a port.\n\n"
+
+			"set link-down port (port_id)\n"
+			"	Set link down for a port.\n\n"
 
 			, list_pkt_forwarding_modes()
 		);
@@ -683,6 +705,41 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"get_flex_filter (port_id) index (idx)\n"
 			"    get info of a flex filter.\n\n"
+
+			"flow_director_filter (port_id) (add|del)"
+			" flow (ip4|ip4-frag|ip6|ip6-frag)"
+			" src (src_ip_address) dst (dst_ip_address)"
+			" flexbytes (flexbytes_value)"
+			" (drop|fwd) queue (queue_id) fd_id (fd_id_value)\n"
+			"    Add/Del an IP type flow director filter.\n\n"
+
+			"flow_director_filter (port_id) (add|del)"
+			" flow (udp4|tcp4|udp6|tcp6)"
+			" src (src_ip_address) (src_port)"
+			" dst (dst_ip_address) (dst_port)"
+			" flexbytes (flexbytes_value)"
+			" (drop|fwd) queue (queue_id) fd_id (fd_id_value)\n"
+			"    Add/Del an UDP/TCP type flow director filter.\n\n"
+
+			"flow_director_filter (port_id) (add|del)"
+			" flow (sctp4|sctp6)"
+			" src (src_ip_address) dst (dst_ip_address)"
+			" tag (verification_tag)"
+			" flexbytes (flexbytes_value) (drop|fwd)"
+			" queue (queue_id) fd_id (fd_id_value)\n"
+			"    Add/Del a SCTP type flow director filter.\n\n"
+
+			"flush_flow_director (port_id)\n"
+			"    Flush all flow director entries of a device.\n\n"
+
+			"flow_director_flex_mask (port_id)"
+			" flow (ip4|ip4-frag|tcp4|udp4|sctp4|ip6|ip6-frag|tcp6|udp6|sctp6|all)"
+			" (mask)\n"
+			"    Configure mask of flex payload.\n\n"
+
+			"flow_director_flex_payload (port_id)"
+			" (l2|l3|l4) (config)\n"
+			"    Configure flex payload selection.\n\n"
 		);
 	}
 }
@@ -1562,11 +1619,13 @@ struct cmd_config_rss_reta {
 };
 
 static int
-parse_reta_config(const char *str, struct rte_eth_rss_reta *reta_conf)
+parse_reta_config(const char *str,
+		  struct rte_eth_rss_reta_entry64 *reta_conf,
+		  uint16_t nb_entries)
 {
 	int i;
 	unsigned size;
-	uint8_t hash_index;
+	uint16_t hash_index, idx, shift;
 	uint8_t nb_queue;
 	char s[256];
 	const char *p, *p0 = str;
@@ -1594,24 +1653,23 @@ parse_reta_config(const char *str, struct rte_eth_rss_reta *reta_conf)
 		for (i = 0; i < _NUM_FLD; i++) {
 			errno = 0;
 			int_fld[i] = strtoul(str_fld[i], &end, 0);
-			if (errno != 0 || end == str_fld[i] || int_fld[i] > 255)
+			if (errno != 0 || end == str_fld[i] ||
+					int_fld[i] > 65535)
 				return -1;
 		}
 
-		hash_index = (uint8_t)int_fld[FLD_HASH_INDEX];
+		hash_index = (uint16_t)int_fld[FLD_HASH_INDEX];
 		nb_queue = (uint8_t)int_fld[FLD_QUEUE];
 
-		if (hash_index >= ETH_RSS_RETA_NUM_ENTRIES) {
-			printf("Invalid RETA hash index=%d",hash_index);
+		if (hash_index >= nb_entries) {
+			printf("Invalid RETA hash index=%d\n", hash_index);
 			return -1;
 		}
 
-		if (hash_index < ETH_RSS_RETA_NUM_ENTRIES/2)
-			reta_conf->mask_lo |= (1ULL << hash_index);
-		else
-			reta_conf->mask_hi |= (1ULL << (hash_index - ETH_RSS_RETA_NUM_ENTRIES/2));
-
-		reta_conf->reta[hash_index] = nb_queue;
+		idx = hash_index / RTE_RETA_GROUP_SIZE;
+		shift = hash_index % RTE_RETA_GROUP_SIZE;
+		reta_conf[idx].mask |= (1ULL << shift);
+		reta_conf[idx].reta[shift] = nb_queue;
 	}
 
 	return 0;
@@ -1619,22 +1677,42 @@ parse_reta_config(const char *str, struct rte_eth_rss_reta *reta_conf)
 
 static void
 cmd_set_rss_reta_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+			__attribute__((unused)) struct cmdline *cl,
+			__attribute__((unused)) void *data)
 {
 	int ret;
-	struct rte_eth_rss_reta reta_conf;
+	struct rte_eth_dev_info dev_info;
+	struct rte_eth_rss_reta_entry64 reta_conf[8];
 	struct cmd_config_rss_reta *res = parsed_result;
 
-	memset(&reta_conf,0,sizeof(struct rte_eth_rss_reta));
+	memset(&dev_info, 0, sizeof(dev_info));
+	rte_eth_dev_info_get(res->port_id, &dev_info);
+	if (dev_info.reta_size == 0) {
+		printf("Redirection table size is 0 which is "
+					"invalid for RSS\n");
+		return;
+	} else
+		printf("The reta size of port %d is %u\n",
+			res->port_id, dev_info.reta_size);
+	if (dev_info.reta_size > ETH_RSS_RETA_SIZE_512) {
+		printf("Currently do not support more than %u entries of "
+			"redirection table\n", ETH_RSS_RETA_SIZE_512);
+		return;
+	}
+
+	memset(reta_conf, 0, sizeof(reta_conf));
 	if (!strcmp(res->list_name, "reta")) {
-		if (parse_reta_config(res->list_of_items, &reta_conf)) {
-			printf("Invalid RSS Redirection Table config entered\n");
+		if (parse_reta_config(res->list_of_items, reta_conf,
+						dev_info.reta_size)) {
+			printf("Invalid RSS Redirection Table "
+					"config entered\n");
 			return;
 		}
-		ret = rte_eth_dev_rss_reta_update(res->port_id, &reta_conf);
+		ret = rte_eth_dev_rss_reta_update(res->port_id,
+				reta_conf, dev_info.reta_size);
 		if (ret != 0)
-			printf("Bad redirection table parameter, return code = %d \n",ret);
+			printf("Bad redirection table parameter, "
+					"return code = %d \n", ret);
 	}
 }
 
@@ -1673,56 +1751,103 @@ struct cmd_showport_reta {
 	uint8_t port_id;
 	cmdline_fixed_string_t rss;
 	cmdline_fixed_string_t reta;
-	uint64_t mask_lo;
-	uint64_t mask_hi;
+	uint16_t size;
+	cmdline_fixed_string_t list_of_items;
 };
 
-static void cmd_showport_reta_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+static int
+showport_parse_reta_config(struct rte_eth_rss_reta_entry64 *conf,
+			   uint16_t nb_entries,
+			   char *str)
+{
+	uint32_t size;
+	const char *p, *p0 = str;
+	char s[256];
+	char *end;
+	char *str_fld[8];
+	uint16_t i, num = nb_entries / RTE_RETA_GROUP_SIZE;
+	int ret;
+
+	p = strchr(p0, '(');
+	if (p == NULL)
+		return -1;
+	p++;
+	p0 = strchr(p, ')');
+	if (p0 == NULL)
+		return -1;
+	size = p0 - p;
+	if (size >= sizeof(s)) {
+		printf("The string size exceeds the internal buffer size\n");
+		return -1;
+	}
+	snprintf(s, sizeof(s), "%.*s", size, p);
+	ret = rte_strsplit(s, sizeof(s), str_fld, num, ',');
+	if (ret <= 0 || ret != num) {
+		printf("The bits of masks do not match the number of "
+					"reta entries: %u\n", num);
+		return -1;
+	}
+	for (i = 0; i < ret; i++)
+		conf[i].mask = (uint64_t)strtoul(str_fld[i], &end, 0);
+
+	return 0;
+}
+
+static void
+cmd_showport_reta_parsed(void *parsed_result,
+			 __attribute__((unused)) struct cmdline *cl,
+			 __attribute__((unused)) void *data)
 {
 	struct cmd_showport_reta *res = parsed_result;
-	struct rte_eth_rss_reta reta_conf;
+	struct rte_eth_rss_reta_entry64 reta_conf[8];
+	struct rte_eth_dev_info dev_info;
 
-	if ((res->mask_lo == 0) && (res->mask_hi == 0)) {
-		printf("Invalid RSS Redirection Table config entered\n");
+	memset(&dev_info, 0, sizeof(dev_info));
+	rte_eth_dev_info_get(res->port_id, &dev_info);
+	if (dev_info.reta_size == 0 || res->size != dev_info.reta_size ||
+				res->size > ETH_RSS_RETA_SIZE_512) {
+		printf("Invalid redirection table size: %u\n", res->size);
 		return;
 	}
 
-	reta_conf.mask_lo = res->mask_lo;
-	reta_conf.mask_hi = res->mask_hi;
-
-	port_rss_reta_info(res->port_id,&reta_conf);
+	memset(reta_conf, 0, sizeof(reta_conf));
+	if (showport_parse_reta_config(reta_conf, res->size,
+				res->list_of_items) < 0) {
+		printf("Invalid string: %s for reta masks\n",
+					res->list_of_items);
+		return;
+	}
+	port_rss_reta_info(res->port_id, reta_conf, res->size);
 }
 
 cmdline_parse_token_string_t cmd_showport_reta_show =
-        TOKEN_STRING_INITIALIZER(struct  cmd_showport_reta, show, "show");
+	TOKEN_STRING_INITIALIZER(struct  cmd_showport_reta, show, "show");
 cmdline_parse_token_string_t cmd_showport_reta_port =
-        TOKEN_STRING_INITIALIZER(struct  cmd_showport_reta, port, "port");
+	TOKEN_STRING_INITIALIZER(struct  cmd_showport_reta, port, "port");
 cmdline_parse_token_num_t cmd_showport_reta_port_id =
-        TOKEN_NUM_INITIALIZER(struct cmd_showport_reta, port_id, UINT8);
+	TOKEN_NUM_INITIALIZER(struct cmd_showport_reta, port_id, UINT8);
 cmdline_parse_token_string_t cmd_showport_reta_rss =
-        TOKEN_STRING_INITIALIZER(struct cmd_showport_reta, rss, "rss");
+	TOKEN_STRING_INITIALIZER(struct cmd_showport_reta, rss, "rss");
 cmdline_parse_token_string_t cmd_showport_reta_reta =
-        TOKEN_STRING_INITIALIZER(struct cmd_showport_reta, reta, "reta");
-cmdline_parse_token_num_t cmd_showport_reta_mask_lo =
-        TOKEN_NUM_INITIALIZER(struct cmd_showport_reta,mask_lo,UINT64);
-cmdline_parse_token_num_t cmd_showport_reta_mask_hi =
-	TOKEN_NUM_INITIALIZER(struct cmd_showport_reta,mask_hi,UINT64);
+	TOKEN_STRING_INITIALIZER(struct cmd_showport_reta, reta, "reta");
+cmdline_parse_token_num_t cmd_showport_reta_size =
+	TOKEN_NUM_INITIALIZER(struct cmd_showport_reta, size, UINT16);
+cmdline_parse_token_string_t cmd_showport_reta_list_of_items =
+	TOKEN_STRING_INITIALIZER(struct cmd_showport_reta,
+					list_of_items, NULL);
 
 cmdline_parse_inst_t cmd_showport_reta = {
 	.f = cmd_showport_reta_parsed,
 	.data = NULL,
-	.help_str = "show port X rss reta mask_lo mask_hi (X = port number)\n\
-			(mask_lo and mask_hi is UINT64)",
+	.help_str = "show port X rss reta (size) (mask0,mask1,...)",
 	.tokens = {
 		(void *)&cmd_showport_reta_show,
 		(void *)&cmd_showport_reta_port,
 		(void *)&cmd_showport_reta_port_id,
 		(void *)&cmd_showport_reta_rss,
 		(void *)&cmd_showport_reta_reta,
-		(void *)&cmd_showport_reta_mask_lo,
-		(void *)&cmd_showport_reta_mask_hi,
+		(void *)&cmd_showport_reta_size,
+		(void *)&cmd_showport_reta_list_of_items,
 		NULL,
 	},
 };
@@ -2738,48 +2863,213 @@ cmdline_parse_inst_t cmd_tx_vlan_reset = {
 
 
 /* *** ENABLE HARDWARE INSERTION OF CHECKSUM IN TX PACKETS *** */
-struct cmd_tx_cksum_set_result {
+struct cmd_tx_cksum_result {
 	cmdline_fixed_string_t tx_cksum;
-	cmdline_fixed_string_t set;
-	uint8_t cksum_mask;
+	cmdline_fixed_string_t mode;
+	cmdline_fixed_string_t proto;
+	cmdline_fixed_string_t hwsw;
 	uint8_t port_id;
 };
 
 static void
-cmd_tx_cksum_set_parsed(void *parsed_result,
+cmd_tx_cksum_parsed(void *parsed_result,
 		       __attribute__((unused)) struct cmdline *cl,
 		       __attribute__((unused)) void *data)
 {
-	struct cmd_tx_cksum_set_result *res = parsed_result;
+	struct cmd_tx_cksum_result *res = parsed_result;
+	int hw = 0;
+	uint16_t ol_flags, mask = 0;
+	struct rte_eth_dev_info dev_info;
 
-	tx_cksum_set(res->port_id, res->cksum_mask);
+	if (port_id_is_invalid(res->port_id)) {
+		printf("invalid port %d\n", res->port_id);
+		return;
+	}
+
+	if (!strcmp(res->mode, "set")) {
+
+		if (!strcmp(res->hwsw, "hw"))
+			hw = 1;
+
+		if (!strcmp(res->proto, "ip")) {
+			mask = TESTPMD_TX_OFFLOAD_IP_CKSUM;
+		} else if (!strcmp(res->proto, "udp")) {
+			mask = TESTPMD_TX_OFFLOAD_UDP_CKSUM;
+		} else if (!strcmp(res->proto, "tcp")) {
+			mask = TESTPMD_TX_OFFLOAD_TCP_CKSUM;
+		} else if (!strcmp(res->proto, "sctp")) {
+			mask = TESTPMD_TX_OFFLOAD_SCTP_CKSUM;
+		} else if (!strcmp(res->proto, "vxlan")) {
+			mask = TESTPMD_TX_OFFLOAD_VXLAN_CKSUM;
+		}
+
+		if (hw)
+			ports[res->port_id].tx_ol_flags |= mask;
+		else
+			ports[res->port_id].tx_ol_flags &= (~mask);
+	}
+
+	ol_flags = ports[res->port_id].tx_ol_flags;
+	printf("IP checksum offload is %s\n",
+		(ol_flags & TESTPMD_TX_OFFLOAD_IP_CKSUM) ? "hw" : "sw");
+	printf("UDP checksum offload is %s\n",
+		(ol_flags & TESTPMD_TX_OFFLOAD_UDP_CKSUM) ? "hw" : "sw");
+	printf("TCP checksum offload is %s\n",
+		(ol_flags & TESTPMD_TX_OFFLOAD_TCP_CKSUM) ? "hw" : "sw");
+	printf("SCTP checksum offload is %s\n",
+		(ol_flags & TESTPMD_TX_OFFLOAD_SCTP_CKSUM) ? "hw" : "sw");
+	printf("VxLAN checksum offload is %s\n",
+		(ol_flags & TESTPMD_TX_OFFLOAD_VXLAN_CKSUM) ? "hw" : "sw");
+
+	/* display warnings if configuration is not supported by the NIC */
+	rte_eth_dev_info_get(res->port_id, &dev_info);
+	if ((ol_flags & TESTPMD_TX_OFFLOAD_IP_CKSUM) &&
+		(dev_info.tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM) == 0) {
+		printf("Warning: hardware IP checksum enabled but not "
+			"supported by port %d\n", res->port_id);
+	}
+	if ((ol_flags & TESTPMD_TX_OFFLOAD_UDP_CKSUM) &&
+		(dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) == 0) {
+		printf("Warning: hardware UDP checksum enabled but not "
+			"supported by port %d\n", res->port_id);
+	}
+	if ((ol_flags & TESTPMD_TX_OFFLOAD_TCP_CKSUM) &&
+		(dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM) == 0) {
+		printf("Warning: hardware TCP checksum enabled but not "
+			"supported by port %d\n", res->port_id);
+	}
+	if ((ol_flags & TESTPMD_TX_OFFLOAD_SCTP_CKSUM) &&
+		(dev_info.tx_offload_capa & DEV_TX_OFFLOAD_SCTP_CKSUM) == 0) {
+		printf("Warning: hardware SCTP checksum enabled but not "
+			"supported by port %d\n", res->port_id);
+	}
 }
 
-cmdline_parse_token_string_t cmd_tx_cksum_set_tx_cksum =
-	TOKEN_STRING_INITIALIZER(struct cmd_tx_cksum_set_result,
+cmdline_parse_token_string_t cmd_tx_cksum_tx_cksum =
+	TOKEN_STRING_INITIALIZER(struct cmd_tx_cksum_result,
 				tx_cksum, "tx_checksum");
-cmdline_parse_token_string_t cmd_tx_cksum_set_set =
-	TOKEN_STRING_INITIALIZER(struct cmd_tx_cksum_set_result,
-				set, "set");
-cmdline_parse_token_num_t cmd_tx_cksum_set_cksum_mask =
-	TOKEN_NUM_INITIALIZER(struct cmd_tx_cksum_set_result,
-				cksum_mask, UINT8);
-cmdline_parse_token_num_t cmd_tx_cksum_set_portid =
-	TOKEN_NUM_INITIALIZER(struct cmd_tx_cksum_set_result,
+cmdline_parse_token_string_t cmd_tx_cksum_mode =
+	TOKEN_STRING_INITIALIZER(struct cmd_tx_cksum_result,
+				mode, "set");
+cmdline_parse_token_string_t cmd_tx_cksum_proto =
+	TOKEN_STRING_INITIALIZER(struct cmd_tx_cksum_result,
+				proto, "ip#tcp#udp#sctp#vxlan");
+cmdline_parse_token_string_t cmd_tx_cksum_hwsw =
+	TOKEN_STRING_INITIALIZER(struct cmd_tx_cksum_result,
+				hwsw, "hw#sw");
+cmdline_parse_token_num_t cmd_tx_cksum_portid =
+	TOKEN_NUM_INITIALIZER(struct cmd_tx_cksum_result,
 				port_id, UINT8);
 
 cmdline_parse_inst_t cmd_tx_cksum_set = {
-	.f = cmd_tx_cksum_set_parsed,
+	.f = cmd_tx_cksum_parsed,
 	.data = NULL,
-	.help_str = "enable hardware insertion of L3/L4checksum with a given "
-	"mask in packets sent on a port, the bit mapping is given as, Bit 0 for ip, "
-	"Bit 1 for UDP, Bit 2 for TCP, Bit 3 for SCTP, Bit 4 for inner ip, "
-	"Bit 5 for inner UDP, Bit 6 for inner TCP, Bit 7 for inner SCTP",
+	.help_str = "enable/disable hardware calculation of L3/L4 checksum when "
+		"using csum forward engine: tx_cksum set ip|tcp|udp|sctp|vxlan hw|sw <port>",
 	.tokens = {
-		(void *)&cmd_tx_cksum_set_tx_cksum,
-		(void *)&cmd_tx_cksum_set_set,
-		(void *)&cmd_tx_cksum_set_cksum_mask,
-		(void *)&cmd_tx_cksum_set_portid,
+		(void *)&cmd_tx_cksum_tx_cksum,
+		(void *)&cmd_tx_cksum_mode,
+		(void *)&cmd_tx_cksum_proto,
+		(void *)&cmd_tx_cksum_hwsw,
+		(void *)&cmd_tx_cksum_portid,
+		NULL,
+	},
+};
+
+cmdline_parse_token_string_t cmd_tx_cksum_mode_show =
+	TOKEN_STRING_INITIALIZER(struct cmd_tx_cksum_result,
+				mode, "show");
+
+cmdline_parse_inst_t cmd_tx_cksum_show = {
+	.f = cmd_tx_cksum_parsed,
+	.data = NULL,
+	.help_str = "show checksum offload configuration: tx_cksum show <port>",
+	.tokens = {
+		(void *)&cmd_tx_cksum_tx_cksum,
+		(void *)&cmd_tx_cksum_mode_show,
+		(void *)&cmd_tx_cksum_portid,
+		NULL,
+	},
+};
+
+/* *** ENABLE HARDWARE SEGMENTATION IN TX PACKETS *** */
+struct cmd_tso_set_result {
+	cmdline_fixed_string_t tso;
+	cmdline_fixed_string_t mode;
+	uint16_t tso_segsz;
+	uint8_t port_id;
+};
+
+static void
+cmd_tso_set_parsed(void *parsed_result,
+		       __attribute__((unused)) struct cmdline *cl,
+		       __attribute__((unused)) void *data)
+{
+	struct cmd_tso_set_result *res = parsed_result;
+	struct rte_eth_dev_info dev_info;
+
+	if (port_id_is_invalid(res->port_id))
+		return;
+
+	if (!strcmp(res->mode, "set"))
+		ports[res->port_id].tso_segsz = res->tso_segsz;
+
+	if (ports[res->port_id].tso_segsz == 0)
+		printf("TSO is disabled\n");
+	else
+		printf("TSO segment size is %d\n",
+			ports[res->port_id].tso_segsz);
+
+	/* display warnings if configuration is not supported by the NIC */
+	rte_eth_dev_info_get(res->port_id, &dev_info);
+	if ((ports[res->port_id].tso_segsz != 0) &&
+		(dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_TSO) == 0) {
+		printf("Warning: TSO enabled but not "
+			"supported by port %d\n", res->port_id);
+	}
+}
+
+cmdline_parse_token_string_t cmd_tso_set_tso =
+	TOKEN_STRING_INITIALIZER(struct cmd_tso_set_result,
+				tso, "tso");
+cmdline_parse_token_string_t cmd_tso_set_mode =
+	TOKEN_STRING_INITIALIZER(struct cmd_tso_set_result,
+				mode, "set");
+cmdline_parse_token_num_t cmd_tso_set_tso_segsz =
+	TOKEN_NUM_INITIALIZER(struct cmd_tso_set_result,
+				tso_segsz, UINT16);
+cmdline_parse_token_num_t cmd_tso_set_portid =
+	TOKEN_NUM_INITIALIZER(struct cmd_tso_set_result,
+				port_id, UINT8);
+
+cmdline_parse_inst_t cmd_tso_set = {
+	.f = cmd_tso_set_parsed,
+	.data = NULL,
+	.help_str = "Set TSO segment size for csum engine (0 to disable): "
+	"tso set <tso_segsz> <port>",
+	.tokens = {
+		(void *)&cmd_tso_set_tso,
+		(void *)&cmd_tso_set_mode,
+		(void *)&cmd_tso_set_tso_segsz,
+		(void *)&cmd_tso_set_portid,
+		NULL,
+	},
+};
+
+cmdline_parse_token_string_t cmd_tso_show_mode =
+	TOKEN_STRING_INITIALIZER(struct cmd_tso_set_result,
+				mode, "show");
+
+
+cmdline_parse_inst_t cmd_tso_show = {
+	.f = cmd_tso_set_parsed,
+	.data = NULL,
+	.help_str = "Show TSO segment size for csum engine: "
+	"tso show <port>",
+	.tokens = {
+		(void *)&cmd_tso_set_tso,
+		(void *)&cmd_tso_show_mode,
+		(void *)&cmd_tso_set_portid,
 		NULL,
 	},
 };
@@ -3642,7 +3932,7 @@ static void cmd_create_bonded_device_parsed(void *parsed_result,
 
 		/* Update number of ports */
 		nb_ports = rte_eth_dev_count();
-		reconfig(port_id);
+		reconfig(port_id, res->socket);
 		rte_eth_promiscuous_enable(port_id);
 	}
 
@@ -3729,6 +4019,65 @@ cmdline_parse_inst_t cmd_set_bond_mac_addr = {
 				(void *)&cmd_set_bond_mac_addr_mac,
 				(void *)&cmd_set_bond_mac_addr_portnum,
 				(void *)&cmd_set_bond_mac_addr_addr,
+				NULL
+		}
+};
+
+
+/* *** SET LINK STATUS MONITORING POLLING PERIOD ON BONDED DEVICE *** */
+struct cmd_set_bond_mon_period_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t bonding;
+	cmdline_fixed_string_t mon_period;
+	uint8_t port_num;
+	uint32_t period_ms;
+};
+
+static void cmd_set_bond_mon_period_parsed(void *parsed_result,
+		__attribute__((unused))  struct cmdline *cl,
+		__attribute__((unused)) void *data)
+{
+	struct cmd_set_bond_mon_period_result *res = parsed_result;
+	int ret;
+
+	if (res->port_num >= nb_ports) {
+		printf("Port id %d must be less than %d\n", res->port_num, nb_ports);
+		return;
+	}
+
+	ret = rte_eth_bond_link_monitoring_set(res->port_num, res->period_ms);
+
+	/* check the return value and print it if is < 0 */
+	if (ret < 0)
+		printf("set_bond_mac_addr error: (%s)\n", strerror(-ret));
+}
+
+cmdline_parse_token_string_t cmd_set_bond_mon_period_set =
+		TOKEN_STRING_INITIALIZER(struct cmd_set_bond_mon_period_result,
+				set, "set");
+cmdline_parse_token_string_t cmd_set_bond_mon_period_bonding =
+		TOKEN_STRING_INITIALIZER(struct cmd_set_bond_mon_period_result,
+				bonding, "bonding");
+cmdline_parse_token_string_t cmd_set_bond_mon_period_mon_period =
+		TOKEN_STRING_INITIALIZER(struct cmd_set_bond_mon_period_result,
+				mon_period,	"mon_period");
+cmdline_parse_token_num_t cmd_set_bond_mon_period_portnum =
+		TOKEN_NUM_INITIALIZER(struct cmd_set_bond_mon_period_result,
+				port_num, UINT8);
+cmdline_parse_token_num_t cmd_set_bond_mon_period_period_ms =
+		TOKEN_NUM_INITIALIZER(struct cmd_set_bond_mon_period_result,
+				period_ms, UINT32);
+
+cmdline_parse_inst_t cmd_set_bond_mon_period = {
+		.f = cmd_set_bond_mon_period_parsed,
+		.data = (void *) 0,
+		.help_str = "set bonding mon_period (port_id) (period_ms): ",
+		.tokens = {
+				(void *)&cmd_set_bond_mon_period_set,
+				(void *)&cmd_set_bond_mon_period_bonding,
+				(void *)&cmd_set_bond_mon_period_mon_period,
+				(void *)&cmd_set_bond_mon_period_portnum,
+				(void *)&cmd_set_bond_mon_period_period_ms,
 				NULL
 		}
 };
@@ -7745,6 +8094,609 @@ cmdline_parse_inst_t cmd_get_flex_filter = {
 	},
 };
 
+/* *** Filters Control *** */
+
+/* *** deal with flow director filter *** */
+struct cmd_flow_director_result {
+	cmdline_fixed_string_t flow_director_filter;
+	uint8_t port_id;
+	cmdline_fixed_string_t ops;
+	cmdline_fixed_string_t flow;
+	cmdline_fixed_string_t flow_type;
+	cmdline_fixed_string_t src;
+	cmdline_ipaddr_t ip_src;
+	uint16_t port_src;
+	cmdline_fixed_string_t dst;
+	cmdline_ipaddr_t ip_dst;
+	uint16_t port_dst;
+	cmdline_fixed_string_t verify_tag;
+	uint32_t verify_tag_value;
+	cmdline_fixed_string_t flexbytes;
+	cmdline_fixed_string_t flexbytes_value;
+	cmdline_fixed_string_t drop;
+	cmdline_fixed_string_t queue;
+	uint16_t  queue_id;
+	cmdline_fixed_string_t fd_id;
+	uint32_t  fd_id_value;
+};
+
+static inline int
+parse_flexbytes(const char *q_arg, uint8_t *flexbytes, uint16_t max_num)
+{
+	char s[256];
+	const char *p, *p0 = q_arg;
+	char *end;
+	unsigned long int_fld;
+	char *str_fld[max_num];
+	int i;
+	unsigned size;
+	int ret = -1;
+
+	p = strchr(p0, '(');
+	if (p == NULL)
+		return -1;
+	++p;
+	p0 = strchr(p, ')');
+	if (p0 == NULL)
+		return -1;
+
+	size = p0 - p;
+	if (size >= sizeof(s))
+		return -1;
+
+	snprintf(s, sizeof(s), "%.*s", size, p);
+	ret = rte_strsplit(s, sizeof(s), str_fld, max_num, ',');
+	if (ret < 0 || ret > max_num)
+		return -1;
+	for (i = 0; i < ret; i++) {
+		errno = 0;
+		int_fld = strtoul(str_fld[i], &end, 0);
+		if (errno != 0 || *end != '\0' || int_fld > UINT8_MAX)
+			return -1;
+		flexbytes[i] = (uint8_t)int_fld;
+	}
+	return ret;
+}
+
+static enum rte_eth_flow_type
+str2flowtype(char *string)
+{
+	uint8_t i = 0;
+	static const struct {
+		char str[32];
+		enum rte_eth_flow_type type;
+	} flowtype_str[] = {
+		{"ip4", RTE_ETH_FLOW_TYPE_IPV4_OTHER},
+		{"ip4-frag", RTE_ETH_FLOW_TYPE_FRAG_IPV4},
+		{"udp4", RTE_ETH_FLOW_TYPE_UDPV4},
+		{"tcp4", RTE_ETH_FLOW_TYPE_TCPV4},
+		{"sctp4", RTE_ETH_FLOW_TYPE_SCTPV4},
+		{"ip6", RTE_ETH_FLOW_TYPE_IPV6_OTHER},
+		{"ip6-frag", RTE_ETH_FLOW_TYPE_FRAG_IPV6},
+		{"udp6", RTE_ETH_FLOW_TYPE_UDPV6},
+		{"tcp6", RTE_ETH_FLOW_TYPE_TCPV6},
+		{"sctp6", RTE_ETH_FLOW_TYPE_TCPV6},
+	};
+
+	for (i = 0; i < RTE_DIM(flowtype_str); i++) {
+		if (!strcmp(flowtype_str[i].str, string))
+			return flowtype_str[i].type;
+	}
+	return RTE_ETH_FLOW_TYPE_NONE;
+}
+
+#define IPV4_ADDR_TO_UINT(ip_addr, ip) \
+do { \
+	if ((ip_addr).family == AF_INET) \
+		(ip) = (ip_addr).addr.ipv4.s_addr; \
+	else { \
+		printf("invalid parameter.\n"); \
+		return; \
+	} \
+} while (0)
+
+#define IPV6_ADDR_TO_ARRAY(ip_addr, ip) \
+do { \
+	if ((ip_addr).family == AF_INET6) \
+		(void)rte_memcpy(&(ip), \
+				 &((ip_addr).addr.ipv6), \
+				 sizeof(struct in6_addr)); \
+	else { \
+		printf("invalid parameter.\n"); \
+		return; \
+	} \
+} while (0)
+
+static void
+cmd_flow_director_filter_parsed(void *parsed_result,
+			  __attribute__((unused)) struct cmdline *cl,
+			  __attribute__((unused)) void *data)
+{
+	struct cmd_flow_director_result *res = parsed_result;
+	struct rte_eth_fdir_filter entry;
+	uint8_t flexbytes[RTE_ETH_FDIR_MAX_FLEXLEN];
+	int ret = 0;
+
+	ret = rte_eth_dev_filter_supported(res->port_id, RTE_ETH_FILTER_FDIR);
+	if (ret < 0) {
+		printf("flow director is not supported on port %u.\n",
+			res->port_id);
+		return;
+	}
+	memset(flexbytes, 0, sizeof(flexbytes));
+	memset(&entry, 0, sizeof(struct rte_eth_fdir_filter));
+	ret = parse_flexbytes(res->flexbytes_value,
+					flexbytes,
+					RTE_ETH_FDIR_MAX_FLEXLEN);
+	if (ret < 0) {
+		printf("error: Cannot parse flexbytes input.\n");
+		return;
+	}
+
+	entry.input.flow_type = str2flowtype(res->flow_type);
+	switch (entry.input.flow_type) {
+	case RTE_ETH_FLOW_TYPE_IPV4_OTHER:
+	case RTE_ETH_FLOW_TYPE_UDPV4:
+	case RTE_ETH_FLOW_TYPE_TCPV4:
+		IPV4_ADDR_TO_UINT(res->ip_dst,
+			entry.input.flow.ip4_flow.dst_ip);
+		IPV4_ADDR_TO_UINT(res->ip_src,
+			entry.input.flow.ip4_flow.src_ip);
+		/* need convert to big endian. */
+		entry.input.flow.udp4_flow.dst_port =
+				rte_cpu_to_be_16(res->port_dst);
+		entry.input.flow.udp4_flow.src_port =
+				rte_cpu_to_be_16(res->port_src);
+		break;
+	case RTE_ETH_FLOW_TYPE_SCTPV4:
+		IPV4_ADDR_TO_UINT(res->ip_dst,
+			entry.input.flow.sctp4_flow.ip.dst_ip);
+		IPV4_ADDR_TO_UINT(res->ip_src,
+			entry.input.flow.sctp4_flow.ip.src_ip);
+		/* need convert to big endian. */
+		entry.input.flow.sctp4_flow.verify_tag =
+				rte_cpu_to_be_32(res->verify_tag_value);
+		break;
+	case RTE_ETH_FLOW_TYPE_IPV6_OTHER:
+	case RTE_ETH_FLOW_TYPE_UDPV6:
+	case RTE_ETH_FLOW_TYPE_TCPV6:
+		IPV6_ADDR_TO_ARRAY(res->ip_dst,
+			entry.input.flow.ipv6_flow.dst_ip);
+		IPV6_ADDR_TO_ARRAY(res->ip_src,
+			entry.input.flow.ipv6_flow.src_ip);
+		/* need convert to big endian. */
+		entry.input.flow.udp6_flow.dst_port =
+				rte_cpu_to_be_16(res->port_dst);
+		entry.input.flow.udp6_flow.src_port =
+				rte_cpu_to_be_16(res->port_src);
+		break;
+	case RTE_ETH_FLOW_TYPE_SCTPV6:
+		IPV6_ADDR_TO_ARRAY(res->ip_dst,
+			entry.input.flow.sctp6_flow.ip.dst_ip);
+		IPV6_ADDR_TO_ARRAY(res->ip_src,
+			entry.input.flow.sctp6_flow.ip.src_ip);
+		/* need convert to big endian. */
+		entry.input.flow.sctp6_flow.verify_tag =
+				rte_cpu_to_be_32(res->verify_tag_value);
+		break;
+	default:
+		printf("invalid parameter.\n");
+		return;
+	}
+	(void)rte_memcpy(entry.input.flow_ext.flexbytes,
+		   flexbytes,
+		   RTE_ETH_FDIR_MAX_FLEXLEN);
+
+	entry.action.flex_off = 0;  /*use 0 by default */
+	if (!strcmp(res->drop, "drop"))
+		entry.action.behavior = RTE_ETH_FDIR_REJECT;
+	else
+		entry.action.behavior = RTE_ETH_FDIR_ACCEPT;
+	/* set to report FD ID by default */
+	entry.action.report_status = RTE_ETH_FDIR_REPORT_ID;
+	entry.action.rx_queue = res->queue_id;
+	entry.soft_id = res->fd_id_value;
+	if (!strcmp(res->ops, "add"))
+		ret = rte_eth_dev_filter_ctrl(res->port_id, RTE_ETH_FILTER_FDIR,
+					     RTE_ETH_FILTER_ADD, &entry);
+	else
+		ret = rte_eth_dev_filter_ctrl(res->port_id, RTE_ETH_FILTER_FDIR,
+					     RTE_ETH_FILTER_DELETE, &entry);
+	if (ret < 0)
+		printf("flow director programming error: (%s)\n",
+			strerror(-ret));
+}
+
+cmdline_parse_token_string_t cmd_flow_director_filter =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 flow_director_filter, "flow_director_filter");
+cmdline_parse_token_num_t cmd_flow_director_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_result,
+			      port_id, UINT8);
+cmdline_parse_token_string_t cmd_flow_director_ops =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 ops, "add#del");
+cmdline_parse_token_string_t cmd_flow_director_flow =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 flow, "flow");
+cmdline_parse_token_string_t cmd_flow_director_flow_type =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 flow_type,
+				 "ip4#ip4-frag#tcp4#udp4#sctp4#"
+				 "ip6#ip6-frag#tcp6#udp6#sctp6");
+cmdline_parse_token_string_t cmd_flow_director_src =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 src, "src");
+cmdline_parse_token_ipaddr_t cmd_flow_director_ip_src =
+	TOKEN_IPADDR_INITIALIZER(struct cmd_flow_director_result,
+				 ip_src);
+cmdline_parse_token_num_t cmd_flow_director_port_src =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_result,
+			      port_src, UINT16);
+cmdline_parse_token_string_t cmd_flow_director_dst =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 dst, "dst");
+cmdline_parse_token_ipaddr_t cmd_flow_director_ip_dst =
+	TOKEN_IPADDR_INITIALIZER(struct cmd_flow_director_result,
+				 ip_dst);
+cmdline_parse_token_num_t cmd_flow_director_port_dst =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_result,
+			      port_dst, UINT16);
+cmdline_parse_token_string_t cmd_flow_director_verify_tag =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				  verify_tag, "verify_tag");
+cmdline_parse_token_num_t cmd_flow_director_verify_tag_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_result,
+			      verify_tag_value, UINT32);
+cmdline_parse_token_string_t cmd_flow_director_flexbytes =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 flexbytes, "flexbytes");
+cmdline_parse_token_string_t cmd_flow_director_flexbytes_value =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+			      flexbytes_value, NULL);
+cmdline_parse_token_string_t cmd_flow_director_drop =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 drop, "drop#fwd");
+cmdline_parse_token_string_t cmd_flow_director_queue =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 queue, "queue");
+cmdline_parse_token_num_t cmd_flow_director_queue_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_result,
+			      queue_id, UINT16);
+cmdline_parse_token_string_t cmd_flow_director_fd_id =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_result,
+				 fd_id, "fd_id");
+cmdline_parse_token_num_t cmd_flow_director_fd_id_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_result,
+			      fd_id_value, UINT32);
+
+cmdline_parse_inst_t cmd_add_del_ip_flow_director = {
+	.f = cmd_flow_director_filter_parsed,
+	.data = NULL,
+	.help_str = "add or delete an ip flow director entry on NIC",
+	.tokens = {
+		(void *)&cmd_flow_director_filter,
+		(void *)&cmd_flow_director_port_id,
+		(void *)&cmd_flow_director_ops,
+		(void *)&cmd_flow_director_flow,
+		(void *)&cmd_flow_director_flow_type,
+		(void *)&cmd_flow_director_src,
+		(void *)&cmd_flow_director_ip_src,
+		(void *)&cmd_flow_director_dst,
+		(void *)&cmd_flow_director_ip_dst,
+		(void *)&cmd_flow_director_flexbytes,
+		(void *)&cmd_flow_director_flexbytes_value,
+		(void *)&cmd_flow_director_drop,
+		(void *)&cmd_flow_director_queue,
+		(void *)&cmd_flow_director_queue_id,
+		(void *)&cmd_flow_director_fd_id,
+		(void *)&cmd_flow_director_fd_id_value,
+		NULL,
+	},
+};
+
+cmdline_parse_inst_t cmd_add_del_udp_flow_director = {
+	.f = cmd_flow_director_filter_parsed,
+	.data = NULL,
+	.help_str = "add or delete an udp/tcp flow director entry on NIC",
+	.tokens = {
+		(void *)&cmd_flow_director_filter,
+		(void *)&cmd_flow_director_port_id,
+		(void *)&cmd_flow_director_ops,
+		(void *)&cmd_flow_director_flow,
+		(void *)&cmd_flow_director_flow_type,
+		(void *)&cmd_flow_director_src,
+		(void *)&cmd_flow_director_ip_src,
+		(void *)&cmd_flow_director_port_src,
+		(void *)&cmd_flow_director_dst,
+		(void *)&cmd_flow_director_ip_dst,
+		(void *)&cmd_flow_director_port_dst,
+		(void *)&cmd_flow_director_flexbytes,
+		(void *)&cmd_flow_director_flexbytes_value,
+		(void *)&cmd_flow_director_drop,
+		(void *)&cmd_flow_director_queue,
+		(void *)&cmd_flow_director_queue_id,
+		(void *)&cmd_flow_director_fd_id,
+		(void *)&cmd_flow_director_fd_id_value,
+		NULL,
+	},
+};
+
+cmdline_parse_inst_t cmd_add_del_sctp_flow_director = {
+	.f = cmd_flow_director_filter_parsed,
+	.data = NULL,
+	.help_str = "add or delete a sctp flow director entry on NIC",
+	.tokens = {
+		(void *)&cmd_flow_director_filter,
+		(void *)&cmd_flow_director_port_id,
+		(void *)&cmd_flow_director_ops,
+		(void *)&cmd_flow_director_flow,
+		(void *)&cmd_flow_director_flow_type,
+		(void *)&cmd_flow_director_src,
+		(void *)&cmd_flow_director_ip_src,
+		(void *)&cmd_flow_director_dst,
+		(void *)&cmd_flow_director_ip_dst,
+		(void *)&cmd_flow_director_verify_tag,
+		(void *)&cmd_flow_director_verify_tag_value,
+		(void *)&cmd_flow_director_flexbytes,
+		(void *)&cmd_flow_director_flexbytes_value,
+		(void *)&cmd_flow_director_drop,
+		(void *)&cmd_flow_director_queue,
+		(void *)&cmd_flow_director_queue_id,
+		(void *)&cmd_flow_director_fd_id,
+		(void *)&cmd_flow_director_fd_id_value,
+		NULL,
+	},
+};
+
+struct cmd_flush_flow_director_result {
+	cmdline_fixed_string_t flush_flow_director;
+	uint8_t port_id;
+};
+
+cmdline_parse_token_string_t cmd_flush_flow_director_flush =
+	TOKEN_STRING_INITIALIZER(struct cmd_flush_flow_director_result,
+				 flush_flow_director, "flush_flow_director");
+cmdline_parse_token_num_t cmd_flush_flow_director_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_flush_flow_director_result,
+			      port_id, UINT8);
+
+static void
+cmd_flush_flow_director_parsed(void *parsed_result,
+			  __attribute__((unused)) struct cmdline *cl,
+			  __attribute__((unused)) void *data)
+{
+	struct cmd_flow_director_result *res = parsed_result;
+	int ret = 0;
+
+	ret = rte_eth_dev_filter_supported(res->port_id, RTE_ETH_FILTER_FDIR);
+	if (ret < 0) {
+		printf("flow director is not supported on port %u.\n",
+			res->port_id);
+		return;
+	}
+
+	ret = rte_eth_dev_filter_ctrl(res->port_id, RTE_ETH_FILTER_FDIR,
+			RTE_ETH_FILTER_FLUSH, NULL);
+	if (ret < 0)
+		printf("flow director table flushing error: (%s)\n",
+			strerror(-ret));
+}
+
+cmdline_parse_inst_t cmd_flush_flow_director = {
+	.f = cmd_flush_flow_director_parsed,
+	.data = NULL,
+	.help_str = "flush all flow director entries of a device on NIC",
+	.tokens = {
+		(void *)&cmd_flush_flow_director_flush,
+		(void *)&cmd_flush_flow_director_port_id,
+		NULL,
+	},
+};
+
+/* *** deal with flow director mask on flexible payload *** */
+struct cmd_flow_director_flex_mask_result {
+	cmdline_fixed_string_t flow_director_flexmask;
+	uint8_t port_id;
+	cmdline_fixed_string_t flow;
+	cmdline_fixed_string_t flow_type;
+	cmdline_fixed_string_t mask;
+};
+
+static void
+cmd_flow_director_flex_mask_parsed(void *parsed_result,
+			  __attribute__((unused)) struct cmdline *cl,
+			  __attribute__((unused)) void *data)
+{
+	struct cmd_flow_director_flex_mask_result *res = parsed_result;
+	struct rte_eth_fdir_flex_mask flex_mask;
+	struct rte_port *port;
+	enum rte_eth_flow_type i;
+	int ret;
+
+	if (res->port_id > nb_ports) {
+		printf("Invalid port, range is [0, %d]\n", nb_ports - 1);
+		return;
+	}
+
+	port = &ports[res->port_id];
+	/** Check if the port is not started **/
+	if (port->port_status != RTE_PORT_STOPPED) {
+		printf("Please stop port %d first\n", res->port_id);
+		return;
+	}
+
+	memset(&flex_mask, 0, sizeof(struct rte_eth_fdir_flex_mask));
+	ret = parse_flexbytes(res->mask,
+			flex_mask.mask,
+			RTE_ETH_FDIR_MAX_FLEXLEN);
+	if (ret < 0) {
+		printf("error: Cannot parse mask input.\n");
+		return;
+	}
+	if (!strcmp(res->flow_type, "all")) {
+		for (i = RTE_ETH_FLOW_TYPE_UDPV4;
+		     i <= RTE_ETH_FLOW_TYPE_FRAG_IPV6;
+		     i++) {
+			flex_mask.flow_type = i;
+			fdir_set_flex_mask(res->port_id, &flex_mask);
+		}
+		cmd_reconfig_device_queue(res->port_id, 1, 0);
+		return;
+	}
+	flex_mask.flow_type = str2flowtype(res->flow_type);
+	fdir_set_flex_mask(res->port_id, &flex_mask);
+	cmd_reconfig_device_queue(res->port_id, 1, 1);
+}
+
+cmdline_parse_token_string_t cmd_flow_director_flexmask =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_flex_mask_result,
+				 flow_director_flexmask,
+				 "flow_director_flex_mask");
+cmdline_parse_token_num_t cmd_flow_director_flexmask_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_flex_mask_result,
+			      port_id, UINT8);
+cmdline_parse_token_string_t cmd_flow_director_flexmask_flow =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_flex_mask_result,
+				 flow, "flow");
+cmdline_parse_token_string_t cmd_flow_director_flexmask_flow_type =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_flex_mask_result,
+				 flow_type,
+				"ip4#ip4-frag#tcp4#udp4#sctp4#"
+				"ip6#ip6-frag#tcp6#udp6#sctp6#all");
+cmdline_parse_token_string_t cmd_flow_director_flexmask_mask =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_flex_mask_result,
+				 mask, NULL);
+
+cmdline_parse_inst_t cmd_set_flow_director_flex_mask = {
+	.f = cmd_flow_director_flex_mask_parsed,
+	.data = NULL,
+	.help_str = "set flow director's flex mask on NIC",
+	.tokens = {
+		(void *)&cmd_flow_director_flexmask,
+		(void *)&cmd_flow_director_flexmask_port_id,
+		(void *)&cmd_flow_director_flexmask_flow,
+		(void *)&cmd_flow_director_flexmask_flow_type,
+		(void *)&cmd_flow_director_flexmask_mask,
+		NULL,
+	},
+};
+
+/* *** deal with flow director flexible payload configuration *** */
+struct cmd_flow_director_flexpayload_result {
+	cmdline_fixed_string_t flow_director_flexpayload;
+	uint8_t port_id;
+	cmdline_fixed_string_t payload_layer;
+	cmdline_fixed_string_t payload_cfg;
+};
+
+static inline int
+parse_offsets(const char *q_arg, uint16_t *offsets, uint16_t max_num)
+{
+	char s[256];
+	const char *p, *p0 = q_arg;
+	char *end;
+	unsigned long int_fld;
+	char *str_fld[max_num];
+	int i;
+	unsigned size;
+	int ret = -1;
+
+	p = strchr(p0, '(');
+	if (p == NULL)
+		return -1;
+	++p;
+	p0 = strchr(p, ')');
+	if (p0 == NULL)
+		return -1;
+
+	size = p0 - p;
+	if (size >= sizeof(s))
+		return -1;
+
+	snprintf(s, sizeof(s), "%.*s", size, p);
+	ret = rte_strsplit(s, sizeof(s), str_fld, max_num, ',');
+	if (ret < 0 || ret > max_num)
+		return -1;
+	for (i = 0; i < ret; i++) {
+		errno = 0;
+		int_fld = strtoul(str_fld[i], &end, 0);
+		if (errno != 0 || *end != '\0' || int_fld > UINT16_MAX)
+			return -1;
+		offsets[i] = (uint16_t)int_fld;
+	}
+	return ret;
+}
+
+static void
+cmd_flow_director_flxpld_parsed(void *parsed_result,
+			  __attribute__((unused)) struct cmdline *cl,
+			  __attribute__((unused)) void *data)
+{
+	struct cmd_flow_director_flexpayload_result *res = parsed_result;
+	struct rte_eth_flex_payload_cfg flex_cfg;
+	struct rte_port *port;
+	int ret = 0;
+
+	if (res->port_id > nb_ports) {
+		printf("Invalid port, range is [0, %d]\n", nb_ports - 1);
+		return;
+	}
+
+	port = &ports[res->port_id];
+	/** Check if the port is not started **/
+	if (port->port_status != RTE_PORT_STOPPED) {
+		printf("Please stop port %d first\n", res->port_id);
+		return;
+	}
+
+	memset(&flex_cfg, 0, sizeof(struct rte_eth_flex_payload_cfg));
+
+	if (!strcmp(res->payload_layer, "l2"))
+		flex_cfg.type = RTE_ETH_L2_PAYLOAD;
+	else if (!strcmp(res->payload_layer, "l3"))
+		flex_cfg.type = RTE_ETH_L3_PAYLOAD;
+	else if (!strcmp(res->payload_layer, "l4"))
+		flex_cfg.type = RTE_ETH_L4_PAYLOAD;
+
+	ret = parse_offsets(res->payload_cfg, flex_cfg.src_offset,
+			    RTE_ETH_FDIR_MAX_FLEXLEN);
+	if (ret < 0) {
+		printf("error: Cannot parse flex payload input.\n");
+		return;
+	}
+
+	fdir_set_flex_payload(res->port_id, &flex_cfg);
+	cmd_reconfig_device_queue(res->port_id, 1, 1);
+}
+
+cmdline_parse_token_string_t cmd_flow_director_flexpayload =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_flexpayload_result,
+				 flow_director_flexpayload,
+				 "flow_director_flex_payload");
+cmdline_parse_token_num_t cmd_flow_director_flexpayload_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_flow_director_flexpayload_result,
+			      port_id, UINT8);
+cmdline_parse_token_string_t cmd_flow_director_flexpayload_payload_layer =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_flexpayload_result,
+				 payload_layer, "l2#l3#l4");
+cmdline_parse_token_string_t cmd_flow_director_flexpayload_payload_cfg =
+	TOKEN_STRING_INITIALIZER(struct cmd_flow_director_flexpayload_result,
+				 payload_cfg, NULL);
+
+cmdline_parse_inst_t cmd_set_flow_director_flex_payload = {
+	.f = cmd_flow_director_flxpld_parsed,
+	.data = NULL,
+	.help_str = "set flow director's flex payload on NIC",
+	.tokens = {
+		(void *)&cmd_flow_director_flexpayload,
+		(void *)&cmd_flow_director_flexpayload_port_id,
+		(void *)&cmd_flow_director_flexpayload_payload_layer,
+		(void *)&cmd_flow_director_flexpayload_payload_cfg,
+		NULL,
+	},
+};
+
 /* ******************************************************************************** */
 
 /* list of instructions */
@@ -7787,6 +8739,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *) &cmd_create_bonded_device,
 	(cmdline_parse_inst_t *) &cmd_set_bond_mac_addr,
 	(cmdline_parse_inst_t *) &cmd_set_balance_xmit_policy,
+	(cmdline_parse_inst_t *) &cmd_set_bond_mon_period,
 #endif
 	(cmdline_parse_inst_t *)&cmd_vlan_offload,
 	(cmdline_parse_inst_t *)&cmd_vlan_tpid,
@@ -7796,6 +8749,9 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_tx_vlan_reset,
 	(cmdline_parse_inst_t *)&cmd_tx_vlan_set_pvid,
 	(cmdline_parse_inst_t *)&cmd_tx_cksum_set,
+	(cmdline_parse_inst_t *)&cmd_tx_cksum_show,
+	(cmdline_parse_inst_t *)&cmd_tso_set,
+	(cmdline_parse_inst_t *)&cmd_tso_show,
 	(cmdline_parse_inst_t *)&cmd_link_flow_control_set,
 	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_rx,
 	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_tx,
@@ -7874,6 +8830,12 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_add_flex_filter,
 	(cmdline_parse_inst_t *)&cmd_remove_flex_filter,
 	(cmdline_parse_inst_t *)&cmd_get_flex_filter,
+	(cmdline_parse_inst_t *)&cmd_add_del_ip_flow_director,
+	(cmdline_parse_inst_t *)&cmd_add_del_udp_flow_director,
+	(cmdline_parse_inst_t *)&cmd_add_del_sctp_flow_director,
+	(cmdline_parse_inst_t *)&cmd_flush_flow_director,
+	(cmdline_parse_inst_t *)&cmd_set_flow_director_flex_mask,
+	(cmdline_parse_inst_t *)&cmd_set_flow_director_flex_payload,
 	NULL,
 };
 

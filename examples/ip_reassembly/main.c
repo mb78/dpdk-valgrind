@@ -79,8 +79,6 @@
 
 #include <rte_ip_frag.h>
 
-#include "main.h"
-
 #define MAX_PKT_BURST 32
 
 
@@ -860,7 +858,7 @@ setup_port_tbl(struct lcore_queue_conf *qconf, uint32_t lcore, int socket,
 	n = RTE_MAX(max_flow_num, 2UL * MAX_PKT_BURST);
 	sz = sizeof (*mtb) + sizeof (mtb->m_table[0]) *  n;
 
-	if ((mtb = rte_zmalloc_socket(__func__, sz, CACHE_LINE_SIZE,
+	if ((mtb = rte_zmalloc_socket(__func__, sz, RTE_CACHE_LINE_SIZE,
 			socket)) == NULL) {
 		RTE_LOG(ERR, IP_RSMBL, "%s() for lcore: %u, port: %u "
 			"failed to allocate %zu bytes\n",
@@ -1012,7 +1010,7 @@ signal_handler(int signum)
 }
 
 int
-MAIN(int argc, char **argv)
+main(int argc, char **argv)
 {
 	struct lcore_queue_conf *qconf;
 	struct rte_eth_dev_info dev_info;

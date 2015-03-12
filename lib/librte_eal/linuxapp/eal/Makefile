@@ -36,6 +36,7 @@ LIB = librte_eal.a
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 
 CFLAGS += -I$(SRCDIR)/include
+CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common/include
 CFLAGS += -I$(RTE_SDK)/lib/librte_ring
 CFLAGS += -I$(RTE_SDK)/lib/librte_mempool
@@ -44,6 +45,7 @@ CFLAGS += -I$(RTE_SDK)/lib/librte_ether
 CFLAGS += -I$(RTE_SDK)/lib/librte_ivshmem
 CFLAGS += -I$(RTE_SDK)/lib/librte_pmd_ring
 CFLAGS += -I$(RTE_SDK)/lib/librte_pmd_pcap
+CFLAGS += -I$(RTE_SDK)/lib/librte_pmd_af_packet
 CFLAGS += -I$(RTE_SDK)/lib/librte_pmd_xenvirt
 CFLAGS += $(WERROR_FLAGS) -O3
 
@@ -99,7 +101,7 @@ ifeq ($(CONFIG_RTE_TOOLCHAIN_GCC),y)
 CFLAGS_eal_thread.o += -Wno-return-type
 endif
 
-INC := rte_per_lcore.h rte_lcore.h rte_interrupts.h rte_kni_common.h rte_dom0_common.h
+INC := rte_interrupts.h rte_kni_common.h rte_dom0_common.h
 
 SYMLINK-$(CONFIG_RTE_LIBRTE_EAL_LINUXAPP)-include/exec-env := \
 	$(addprefix include/exec-env/,$(INC))

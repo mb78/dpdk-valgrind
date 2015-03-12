@@ -84,6 +84,12 @@
 		ETH_RSS_IPV6_UDP | \
 		ETH_RSS_IPV6_UDP_EX)
 
+/* Bit Mask to indicate what bits required for building TX context */
+#define IGB_TX_OFFLOAD_MASK (			 \
+		PKT_TX_VLAN_PKT |		 \
+		PKT_TX_IP_CKSUM |		 \
+		PKT_TX_L4_MASK)
+
 static inline struct rte_mbuf *
 rte_rxmbuf_alloc(struct rte_mempool *mp)
 {
@@ -262,7 +268,7 @@ igbe_set_xmit_ctx(struct igb_tx_queue* txq,
 
 	if (ol_flags & PKT_TX_IP_CKSUM) {
 		type_tucmd_mlhl = E1000_ADVTXD_TUCMD_IPV4;
-		cmp_mask |= TX_MAC_LEN_CMP_MASK;
+		cmp_mask |= TX_MACIP_LEN_CMP_MASK;
 	}
 
 	/* Specify which HW CTX to upload. */
@@ -361,6 +367,13 @@ eth_igb_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	struct rte_mbuf     *tx_pkt;
 	struct rte_mbuf     *m_seg;
 	union igb_vlan_macip vlan_macip_lens;
+	union {
+		uint16_t u16;
+		struct {
+			uint16_t l3_len:9;
+			uint16_t l2_len:7;
+		};
+	} l2_l3_len;
 	uint64_t buf_dma_addr;
 	uint32_t olinfo_status;
 	uint32_t cmd_type_len;
@@ -398,9 +411,11 @@ eth_igb_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		tx_last = (uint16_t) (tx_id + tx_pkt->nb_segs - 1);
 
 		ol_flags = tx_pkt->ol_flags;
+		l2_l3_len.l2_len = tx_pkt->l2_len;
+		l2_l3_len.l3_len = tx_pkt->l3_len;
 		vlan_macip_lens.f.vlan_tci = tx_pkt->vlan_tci;
-		vlan_macip_lens.f.l2_l3_len = tx_pkt->l2_l3_len;
-		tx_ol_req = ol_flags & PKT_TX_OFFLOAD_MASK;
+		vlan_macip_lens.f.l2_l3_len = l2_l3_len.u16;
+		tx_ol_req = ol_flags & IGB_TX_OFFLOAD_MASK;
 
 		/* If a Context Descriptor need be built . */
 		if (tx_ol_req) {
@@ -1240,7 +1255,7 @@ eth_igb_tx_queue_setup(struct rte_eth_dev *dev,
 
 	/* First allocate the tx queue data structure */
 	txq = rte_zmalloc("ethdev TX queue", sizeof(struct igb_tx_queue),
-							CACHE_LINE_SIZE);
+							RTE_CACHE_LINE_SIZE);
 	if (txq == NULL)
 		return (-ENOMEM);
 
@@ -1278,7 +1293,7 @@ eth_igb_tx_queue_setup(struct rte_eth_dev *dev,
 	/* Allocate software ring */
 	txq->sw_ring = rte_zmalloc("txq->sw_ring",
 				   sizeof(struct igb_tx_entry) * nb_desc,
-				   CACHE_LINE_SIZE);
+				   RTE_CACHE_LINE_SIZE);
 	if (txq->sw_ring == NULL) {
 		igb_tx_queue_release(txq);
 		return (-ENOMEM);
@@ -1374,7 +1389,7 @@ eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 
 	/* First allocate the RX queue data structure. */
 	rxq = rte_zmalloc("ethdev RX queue", sizeof(struct igb_rx_queue),
-			  CACHE_LINE_SIZE);
+			  RTE_CACHE_LINE_SIZE);
 	if (rxq == NULL)
 		return (-ENOMEM);
 	rxq->mb_pool = mp;
@@ -1416,7 +1431,7 @@ eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 	/* Allocate software ring. */
 	rxq->sw_ring = rte_zmalloc("rxq->sw_ring",
 				   sizeof(struct igb_rx_entry) * nb_desc,
-				   CACHE_LINE_SIZE);
+				   RTE_CACHE_LINE_SIZE);
 	if (rxq->sw_ring == NULL) {
 		igb_rx_queue_release(rxq);
 		return (-ENOMEM);

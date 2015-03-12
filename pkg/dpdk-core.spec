@@ -30,13 +30,13 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Name: dpdk
-Version: 1.7.1
+Version: 1.8.0
 Release: 1
 Packager: packaging@6wind.com
 URL: http://dpdk.org
 Source: http://dpdk.org/browse/dpdk/snapshot/dpdk-%{version}.tar.gz
 
-Summary: Intel(r) Data Plane Development Kit core
+Summary: Data Plane Development Kit core
 Group: System Environment/Libraries
 License: BSD and LGPLv2 and GPLv2
 
@@ -44,27 +44,28 @@ ExclusiveArch: i686, x86_64
 %global target %{_arch}-native-linuxapp-gcc
 %global machine default
 
-BuildRequires: kernel-devel, kernel-headers, libpcap-devel, xen-devel, doxygen
+BuildRequires: kernel-devel, kernel-headers, libpcap-devel, xen-devel, doxygen, python-sphinx
 
 %description
-Intel(r) DPDK core includes kernel modules, core libraries and tools.
+DPDK core includes kernel modules, core libraries and tools.
 testpmd application allows to test fast packet processing environments
 on x86 platforms. For instance, it can be used to check that environment
 can support fast path applications such as 6WINDGate, pktgen, rumptcpip, etc.
 More libraries are available as extensions in other packages.
 
 %package devel
-Summary: Intel(r) Data Plane Development Kit for development
+Summary: Data Plane Development Kit for development
 Requires: %{name}%{?_isa} = %{version}-%{release}
 %description devel
-Intel(r) DPDK devel is a set of makefiles, headers and examples
+DPDK devel is a set of makefiles, headers and examples
 for fast packet processing on x86 platforms.
 
 %package doc
-Summary: Intel(r) Data Plane Development Kit API documentation
+Summary: Data Plane Development Kit API documentation
 BuildArch: noarch
 %description doc
-Intel(r) DPDK doc explains the API details in doxygen HTML format.
+DPDK doc is divided in two parts: API details in doxygen HTML format
+and guides in sphinx HTML format.
 
 %global destdir %{buildroot}%{_prefix}
 %global moddir  /lib/modules/%(uname -r)/extra
@@ -92,7 +93,7 @@ mkdir -p                               %{buildroot}%{moddir}
 mv    %{destdir}/%{target}/kmod/*.ko   %{buildroot}%{moddir}
 rmdir %{destdir}/%{target}/kmod
 mkdir -p                               %{buildroot}%{_sbindir}
-ln -s %{datadir}/tools/igb_uio_bind.py %{buildroot}%{_sbindir}/igb_uio_bind
+ln -s %{datadir}/tools/*nic_bind.py    %{buildroot}%{_sbindir}/dpdk_nic_bind
 mkdir -p                               %{buildroot}%{_bindir}
 mv    %{destdir}/%{target}/app/testpmd %{buildroot}%{_bindir}
 rmdir %{destdir}/%{target}/app

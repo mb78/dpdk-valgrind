@@ -30,23 +30,32 @@
 
 New Features
 ============
+*   Link Bonding
 
-*   Packet Distributor library for dynamic, single-packet at a time, load balancing
+    *   Support for 802.3ad link aggregation (mode 4) and transmit load balancing (mode 5) to the link bonding library.
 
-*   IP fragmentation and reassembly library
+    *   Support for registration of link status change callbacks with link bonding devices.
 
-*   Support for IPv6 in IP fragmentation and reassembly sample applications
+    *   Support for slaves devices which do not support link status change interrupts in the link bonding library via a link status polling mechanism.
 
-*   Support for VFIO for mapping BARs and setting up interrupts
+*   Poll Mode Driver - 40 GbE Controllers (librte_pmd_i40e)
 
-*   Link Bonding PMD Library supporting round-robin, active backup, balance(layer 2, layer 2+3, and layer 3+4) and broadcast bonding modes
+    *   Support for Flow Director
 
-*   Support zero copy mode RX/TX in user space vhost sample
+    *   Support for ethertype filter
 
-*   Support multiple queues in virtio-net PMD
+    *   Support RSS in VF
 
-*   Support for Intel® 40GbE Controllers
+    *   Support configuring redirection table with different size from 1GbE and 10 GbE
 
-*   Support NIC filters in addition to flow director for Intel® 1GbE and 10GbE Controllers
+       -   128/512 entries of 40GbE PF
+
+       -   64 entries of 40GbE VF
+
+    *   Support configuring hash functions
+
+    *   Support for VXLAN packet on Intel® 40GbE Controllers
+
+*   Packet Distributor Sample Application
 
 For further features supported in this release, see Chapter 3 Supported Features.

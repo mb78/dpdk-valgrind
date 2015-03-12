@@ -39,6 +39,7 @@ Contents:
 
    linux_gsg/index
    freebsd_gsg/index
+   prog_guide/index
    sample_app_ug/index
    testpmd_app_ug/index
    rel_notes/index

@@ -31,7 +31,6 @@
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
-DIRS-$(CONFIG_RTE_LIBC) += libc
 DIRS-$(CONFIG_RTE_LIBRTE_EAL) += librte_eal
 DIRS-$(CONFIG_RTE_LIBRTE_MALLOC) += librte_malloc
 DIRS-$(CONFIG_RTE_LIBRTE_RING) += librte_ring
@@ -44,9 +43,11 @@ DIRS-$(CONFIG_RTE_LIBRTE_ETHER) += librte_ether
 DIRS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += librte_pmd_e1000
 DIRS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += librte_pmd_ixgbe
 DIRS-$(CONFIG_RTE_LIBRTE_I40E_PMD) += librte_pmd_i40e
+DIRS-$(CONFIG_RTE_LIBRTE_ENIC_PMD) += librte_pmd_enic
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_BOND) += librte_pmd_bond
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_RING) += librte_pmd_ring
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_PCAP) += librte_pmd_pcap
+DIRS-$(CONFIG_RTE_LIBRTE_PMD_AF_PACKET) += librte_pmd_af_packet
 DIRS-$(CONFIG_RTE_LIBRTE_VIRTIO_PMD) += librte_pmd_virtio
 DIRS-$(CONFIG_RTE_LIBRTE_VMXNET3_PMD) += librte_pmd_vmxnet3
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_XENVIRT) += librte_pmd_xenvirt

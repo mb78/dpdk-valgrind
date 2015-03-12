@@ -37,8 +37,7 @@
 /**
  * @file
  *
- * API for lcore and Socket Manipulation. Parts of this are execution
- * environment specific.
+ * API for lcore and socket manipulation
  *
  */
 #include <rte_per_lcore.h>
@@ -50,6 +49,28 @@ extern "C" {
 #endif
 
 #define LCORE_ID_ANY -1    /**< Any lcore. */
+
+/**
+ * Structure storing internal configuration (per-lcore)
+ */
+struct lcore_config {
+	unsigned detected;         /**< true if lcore was detected */
+	pthread_t thread_id;       /**< pthread identifier */
+	int pipe_master2slave[2];  /**< communication pipe with master */
+	int pipe_slave2master[2];  /**< communication pipe with master */
+	lcore_function_t * volatile f;         /**< function to call */
+	void * volatile arg;       /**< argument of function */
+	volatile int ret;          /**< return value of function */
+	volatile enum rte_lcore_state_t state; /**< lcore state */
+	unsigned socket_id;        /**< physical socket id for this lcore */
+	unsigned core_id;          /**< core number on socket for this lcore */
+	int core_index;            /**< relative index, starting from 0 */
+};
+
+/**
+ * Internal configuration (per-lcore)
+ */
+extern struct lcore_config lcore_config[RTE_MAX_LCORE];
 
 RTE_DECLARE_PER_LCORE(unsigned, _lcore_id); /**< Per core "core id". */
 
@@ -89,7 +110,24 @@ rte_lcore_count(void)
 	return cfg->lcore_count;
 }
 
-#include <exec-env/rte_lcore.h>
+/**
+ * Return the index of the lcore starting from zero.
+ * The order is physical or given by command line (-l option).
+ *
+ * @param lcore_id
+ *   The targeted lcore, or -1 for the current one.
+ * @return
+ *   The relative index, or -1 if not enabled.
+ */
+static inline int
+rte_lcore_index(int lcore_id)
+{
+	if (lcore_id >= RTE_MAX_LCORE)
+		return -1;
+	if (lcore_id < 0)
+		lcore_id = rte_lcore_id();
+	return lcore_config[lcore_id].core_index;
+}
 
 /**
  * Return the ID of the physical socket of the logical core we are
